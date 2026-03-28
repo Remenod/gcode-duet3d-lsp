@@ -1,20 +1,48 @@
 {
   "name": "rrf-lsp-vscode",
+  "displayName": "RRF G-Code Support",
   "description": "G-code Duet3D RRF Language Server",
   "author": "remenod",
   "license": "GPL-3.0-only",
   "version": "1.0.0",
   "publisher": "remenod",
-  "categories": [],
+  "categories": [
+    "Programming Languages"
+  ],
   "engines": {
     "vscode": "^1.75.0"
   },
   "activationEvents": [
-    "onLanguage"
+    "onLanguage:rrf-gcode",
+    "onLanguage:gcode"
   ],
-  "main": "./client/out/extension",
+  "main": "./client/out/extension.js",
   "contributes": {
-    "configuration": {}
+    "languages": [
+      {
+        "id": "rrf-gcode",
+        "aliases": [
+          "RRF GCode",
+          "RepRapFirmware"
+        ],
+        "extensions": [
+          ".gcode",
+          ".g",
+          ".gc",
+          ".gco"
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "RRF G-Code Support",
+      "properties": {
+        "rrfgcode.activateOnGenericGcode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable LSP for generic gcode files along with rrf-gcode"
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
@@ -26,10 +54,5 @@
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.75.0",
     "typescript": "^5.0.0"
-  },
-  "dependencies": {
-    "vscode-languageclient": "^9.0.1",
-    "vscode-languageserver": "^9.0.1",
-    "vscode-languageserver-textdocument": "^1.0.12"
   }
 }
