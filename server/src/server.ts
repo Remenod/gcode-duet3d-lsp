@@ -50,7 +50,7 @@ connection.onHover((params: HoverParams): Hover | null => {
   const lines = text.split(/\r?\n/);
   const line = lines[position.line];
 
-  const wordMatch = /\b[GMT]\d+(\.\d+)?\b/gi;
+  const wordMatch = /\b(?:[GM]\d+(?:\.\d+)?|T\d*)\b/gi;
   let match;
 
   while ((match = wordMatch.exec(line)) !== null) {
@@ -59,7 +59,10 @@ connection.onHover((params: HoverParams): Hover | null => {
 
     if (position.character >= start && position.character <= end) {
       const command = match[0].toUpperCase();
-      const doc = gcodeData[command];
+
+      const docKey = command.startsWith('T') ? 'T' : command;
+
+      const doc = gcodeData[docKey];
 
       if (doc) {
         const baseUrl = "https://docs.duet3d.com/User_manual/Reference/Gcodes";
