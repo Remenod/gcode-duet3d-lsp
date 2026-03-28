@@ -50,7 +50,7 @@ connection.onHover((params: HoverParams): Hover | null => {
   const lines = text.split(/\r?\n/);
   const line = lines[position.line];
 
-  const wordMatch = /\b(?:[GM]\d+(?:\.\d+)?|T\d*)\b/gi;
+  const wordMatch = /\b(?:[GM]\d+(?:\.\d+)?|T\d{0,2})\b/gi;
   let match;
 
   while ((match = wordMatch.exec(line)) !== null) {
@@ -59,6 +59,12 @@ connection.onHover((params: HoverParams): Hover | null => {
 
     if (position.character >= start && position.character <= end) {
       const command = match[0].toUpperCase();
+
+      if (command.startsWith('T') && command.length > 1) {
+        const toolNumber = parseInt(command.substring(1));
+        if (toolNumber < -1 || toolNumber > 49)
+          return null;
+      }
 
       const docKey = command.startsWith('T') ? 'T' : command;
 
