@@ -1,4 +1,25 @@
-# G-code Duet3D RRF Language Server for vscode
+# RRF G-code Language Server for vscode
+
+A lightweight Language Server Protocol (LSP) extension for VS Code that provides rich language support for RepRapFirmware (RRF) G-code files.
+
+## Features
+
+Currently, in version 0.1.0, this extension provides intelligent **Hover Documentation**:
+* Hover over any valid G-code or M-code (e.g., `G1`, `M563`) to see its full title and description.
+* Hover over Tool commands (e.g., `T0`, `T-1`) to see tool selection logic.
+* Includes direct links to the official Duet3D documentation for deep dives.
+* Smart validation: ignores invalid tool numbers (e.g., `T50` or `T131123`).
+
+## Extension Settings
+
+This extension contributes the following settings:
+
+* `rrfgcode.activateOnGenericGcode`: Enable or disable LSP features for generic `.gcode` files (enabled by default).
+
+## Known Issues
+
+* Autocompletion (IntelliSense) is not yet implemented (planned for future releases).
+* Strict syntax validation and error highlighting are currently limited.
 
 ## License 
 
