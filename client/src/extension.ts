@@ -24,8 +24,10 @@ export function activate(context: ExtensionContext) {
   };
 
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ scheme: 'file', language: 'rrf-gcode' }],
-
+    documentSelector: [
+      { scheme: 'file', language: 'rrf-gcode' },
+      { scheme: 'file', language: 'gcode' }
+    ],
     synchronize: {
       fileEvents: workspace.createFileSystemWatcher('**/.clientrc')
     }
