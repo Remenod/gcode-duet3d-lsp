@@ -77,13 +77,8 @@ def to_markdown(node):
 def get_inner_markdown(node):
     return "".join(to_markdown(child) for child in node.children)
 
-def generate_lsp_database():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    output_dir = os.path.join(script_dir, '../server/data')
+def generate_lsp_database(output_path, url):
     os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, 'gcode-commands.json')
-
-    url = "https://docs.duet3d.com/User_manual/Reference/Gcodes"
 
     print(f"Loading HTML page from {url}...")
     
@@ -163,4 +158,9 @@ def generate_lsp_database():
     print(f"Commands processed: {len(lsp_database) - 1}")  # Minus 1 due to the _meta block
 
 if __name__ == "__main__":
-    generate_lsp_database()
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    output_dir = os.path.join(script_dir, '../server/data')
+    output_path = os.path.join(output_dir, 'gcode-commands.json')
+    url = "https://docs.duet3d.com/User_manual/Reference/Gcodes"
+
+    generate_lsp_database(output_path, url)
