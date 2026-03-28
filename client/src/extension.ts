@@ -11,13 +11,10 @@ import {
 let client: LanguageClient;
 
 export function activate(context: ExtensionContext) {
-  // The server is implemented in node
   const serverModule = context.asAbsolutePath(
     path.join("server", "out", "server.js")
   );
 
-  // If the extension is launched in debug mode then the debug server options are used
-  // Otherwise the run options are used
   const serverOptions: ServerOptions = {
     run: { module: serverModule, transport: TransportKind.ipc },
     debug: {
@@ -34,7 +31,6 @@ export function activate(context: ExtensionContext) {
     }
   };
 
-  // Create the language client and start the client.
   client = new LanguageClient(
     "REPLACE_ME language-server-id",
     "REPLACE_ME language server name",
@@ -42,7 +38,6 @@ export function activate(context: ExtensionContext) {
     clientOptions
   );
 
-  // Start the client. This will also launch the server
   client.start();
 }
 
