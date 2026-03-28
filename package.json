@@ -12,6 +12,10 @@
   "engines": {
     "vscode": "^1.75.0"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Remenod/rrf-lsp-vscode"
+  },
   "activationEvents": [
     "onLanguage:rrf-gcode",
     "onLanguage:gcode"
