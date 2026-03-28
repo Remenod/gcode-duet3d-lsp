@@ -1,4 +1,4 @@
-# Duet3D LSP vscode extension
+# G-code Duet3D RRF Language Server for vscode
 
 ## License 
 

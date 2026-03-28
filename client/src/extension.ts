@@ -32,8 +32,8 @@ export function activate(context: ExtensionContext) {
   };
 
   client = new LanguageClient(
-    'duet3dGcodeServer',
-    'Duet3D G-code Language Server',
+    'rrf-lsp-vscode',
+    'G-code Duet3D RRF Language Server',
     serverOptions,
     clientOptions
   );

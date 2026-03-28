@@ -29,7 +29,7 @@ let gcodeData: Record<string, GCodeDoc> = {};
 try {
   gcodeData = JSON.parse(fs.readFileSync(gcodeDataPath, 'utf8'));
 } catch (error) {
-  connection.console.error(`Помилка завантаження бази G-code: ${error}`);
+  connection.console.error(`An Error occurred during loading RRF G-Code Dictionary: ${error}`);
 }
 
 connection.onInitialize((params: InitializeParams) => {

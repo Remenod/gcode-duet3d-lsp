@@ -1,6 +1,6 @@
 {
-  "name": "gcode-duet3d-lsp",
-  "description": "G-code LSP for Duet3D",
+  "name": "rrf-lsp-vscode",
+  "description": "G-code Duet3D RRF Language Server",
   "author": "remenod",
   "license": "GPL-3.0-only",
   "version": "1.0.0",
