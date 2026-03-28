@@ -1,41 +1,10 @@
 {
-  "name": "rrf-lsp-vscode",
-  "description": "G-code Duet3D RRF Language Server",
+  "name": "rrf-lsp-client",
+  "description": "Client for G-code Duet3D RRF Language Server",
   "author": "remenod",
   "license": "GPL-3.0-only",
   "version": "1.0.0",
-  "publisher": "remenod",
-  "categories": [],
-  "engines": {
-    "vscode": "^1.75.0"
-  },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
-  },
-  "devDependencies": {
-    "@types/vscode": "^1.110.0"
-  },
-  "activationEvents": [
-    "onLanguage:gcode"
-  ],
-  "contributes": {
-    "languages": [
-      {
-        "id": "rrf-gcode",
-        "aliases": [
-          "G-code",
-          "rrf-G-code",
-          "RRF-G-code",
-          "gcode",
-          "rrf-gcode",
-          "RRF-gcode"
-        ],
-        "extensions": [
-          ".gcode",
-          ".g"
-        ]
-      }
-    ],
-    "configuration": {}
   }
 }
