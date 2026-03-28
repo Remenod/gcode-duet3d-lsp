@@ -14,5 +14,28 @@
   },
   "devDependencies": {
     "@types/vscode": "^1.110.0"
+  },
+  "activationEvents": [
+    "onLanguage:gcode"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "rrf-gcode",
+        "aliases": [
+          "G-code",
+          "rrf-G-code",
+          "RRF-G-code",
+          "gcode",
+          "rrf-gcode",
+          "RRF-gcode"
+        ],
+        "extensions": [
+          ".gcode",
+          ".g"
+        ]
+      }
+    ],
+    "configuration": {}
   }
 }
