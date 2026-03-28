@@ -97,6 +97,15 @@ def generate_lsp_database():
     soup = BeautifulSoup(html_content, 'html.parser')
     lsp_database = {}
 
+    lsp_database["_meta"] = {
+            "title": "Duet3D G-Code Dictionary for LSP",
+            "source_url": "https://docs.duet3d.com/en/User_manual/Reference/Gcodes",
+            "license": "CC BY-SA 4.0",
+            "original_author": "Duet3D",
+            "parsed_and_converted_by": "Remenod",
+            "description": "This file contains parsed documentation for G, M, and T commands. Do not remove this _meta block."
+        }
+
     command_pattern = re.compile(r'^([GMT](?:\d+(?:\.\d+)?)?):\s*(.*)')
 
     print("Compiling the database...")
