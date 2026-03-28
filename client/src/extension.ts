@@ -32,8 +32,8 @@ export function activate(context: ExtensionContext) {
   };
 
   client = new LanguageClient(
-    "REPLACE_ME language-server-id",
-    "REPLACE_ME language server name",
+    'duet3dGcodeServer',
+    'Duet3D G-code Language Server',
     serverOptions,
     clientOptions
   );
