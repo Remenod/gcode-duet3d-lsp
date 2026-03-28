@@ -32,7 +32,9 @@
         ],
         "extensions": [
           ".gcode",
-          ".g"
+          ".g",
+          ".gc",
+          ".gco"
         ]
       }
     ],
