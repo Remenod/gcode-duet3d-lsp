@@ -39,7 +39,7 @@
         "rrfgcode.activateOnGenericGcode": {
           "type": "boolean",
           "default": true,
-          "description": "Enable LSP for generic gcode files along with rrf-gcode"
+          "description": "Enable LSP for generic non RRF gcode files"
         }
       }
     }
