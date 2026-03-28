@@ -34,6 +34,15 @@
         ]
       }
     ],
-    "configuration": {}
+    "configuration": {
+      "title": "RRF G-Code Support",
+      "properties": {
+        "rrfgcode.activateOnGenericGcode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable LSP for gcode files along with rrf-gcode"
+        }
+      }
+    }
   }
 }

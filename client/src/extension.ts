@@ -1,5 +1,5 @@
 import * as path from "path";
-import { workspace, ExtensionContext } from "vscode";
+import { workspace, ExtensionContext, DocumentSelector } from "vscode";
 
 import {
   LanguageClient,
@@ -15,6 +15,9 @@ export function activate(context: ExtensionContext) {
     path.join("server", "out", "server.js")
   );
 
+  const config = workspace.getConfiguration('rrfgcode');
+  const activateOnGeneric = config.get<boolean>('activateOnGenericGcode', true);
+
   const serverOptions: ServerOptions = {
     run: { module: serverModule, transport: TransportKind.ipc },
     debug: {
@@ -23,11 +26,16 @@ export function activate(context: ExtensionContext) {
     },
   };
 
+  const documentSelector = [
+    { scheme: 'file', language: 'rrf-gcode' }
+  ];
+
+  if (activateOnGeneric) {
+    documentSelector.push({ scheme: 'file', language: 'gcode' });
+  }
+
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [
-      { scheme: 'file', language: 'rrf-gcode' },
-      { scheme: 'file', language: 'gcode' }
-    ],
+    documentSelector: documentSelector,
     synchronize: {
       fileEvents: workspace.createFileSystemWatcher('**/.clientrc')
     }
