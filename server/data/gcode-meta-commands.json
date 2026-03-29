@@ -1,0 +1,75 @@
+{
+    "_meta": {
+        "title": "RRF G-Code Dictionary",
+        "source_url": "https://docs.duet3d.com/User_manual/Reference/Gcode_meta_commands",
+        "license": "CC BY-SA 4.0",
+        "original_author": "Duet3D",
+        "parsed_and_converted_by": "Remenod",
+        "description": "This file contains parsed documentation for meta commands. Do not remove this _meta block."
+    },
+    "abort": {
+        "title": "Abort command",
+        "description": "`abort <opt-expression>`\n\nThis causes all nested macros and the current print file (if any) to be terminated. The expression (if present) is converted to a string, which is included in the message presented to the user and written to the log file.",
+        "anchor": "#abort-command"
+    },
+    "echo": {
+        "title": "Echo command",
+        "description": "Starting with firmware 3.4 the output from an echo command can be redirected to a file. To create a file (deleting any existing file of the same name) containing the text resulting from the echo command, use this syntax:\n\n```\necho ><filename> <expression>, <expression>, ...\n```\n\nwhere <filename> is either a quoted string or an expression enclosed in { } that evaluates to a string.\n\nTo append a line to an existing file (or create a new file if it doesn't already exist), use:\n\n```\necho >><filename> <expression>, <expression>, ...\n```\n\nTo append to a file without adding a newline character at the end, so that multiple echo commands can be used to build a single long line, use the following (supported in firmware 3.5beta2 and later):\n\n```\necho >>><filename> <expression>, <expression>, ...\n```\n\nThere must be no spaces between the >,>> or >>> symbol and <filename>. The default folder for the file is /sys.\n\nExample:\n\n```\necho >\"mymacro.g\" \"G1 F3000 X{move.axes[0].max-10}\" ; move to 10mm below axis max when the macro was generated\necho >>\"mymacro.g\" \"G1 F3000 Y{move.axes[1].max-10}\" ; move to 10mm below axis max when the macro is executed\n```\n\nExample writing a single long line:\n\n(Note that the line is started with a \">>>\" echo, subsquent elements are added with \">>>\" and the final element in the line is added with a \">>\" which appends the newline character)\n\n```\necho >>>\"data.csv\" move.axes[0].machinePosition^\",\"^move.axes[1].machinePosition^\",\"^move.axes[2].machinePosition\necho >>>\"data.csv\" \",\"^heat.heaters[0].current^\",\"^heat.heaters[2].current^\",\"^heat.heaters[3].current\necho >>\"data.csv\" \",\"^sensors.filamentMonitors[0].position^\",\"^sensors.filamentMonitors[1].position^\",\"^sensors.filamentMonitors[2].position\n```\n\nIf you needs to write a new file with multiple entries on a single line and the file may already exist, use M472 to delete it first. You can use the fileexists() condition to only delete the file if it exists.\n\n> Note echo only echos back to the input its sent from, or to a file. To get information to a different input (e.g. echo to the HTTP UI from a macro called from a different input) use M118.",
+        "anchor": "#echo-command"
+    },
+    "false": {
+        "title": "Named constant",
+        "description": "**Type**: `bool`\n\nBoolean false",
+        "anchor": "#named-constants"
+    },
+    "input": {
+        "title": "Named constant",
+        "description": "**Type**: `(variable)`\n\nThe most recent input from a message box with mode 4, 5, 6 or 7 (see M291 command)",
+        "anchor": "#named-constants"
+    },
+    "iterations": {
+        "title": "Named constant",
+        "description": "**Type**: `int`\n\nThe number of completed iterations of the innermost loop",
+        "anchor": "#named-constants"
+    },
+    "line": {
+        "title": "Named constant",
+        "description": "**Type**: `int`\n\nThe current line number in the file being executed",
+        "anchor": "#named-constants"
+    },
+    "null": {
+        "title": "Named constant",
+        "description": "**Type**: `object`\n\nThe null object",
+        "anchor": "#named-constants"
+    },
+    "pi": {
+        "title": "Named constant",
+        "description": "**Type**: `float`\n\nPi (3.14159265...)",
+        "anchor": "#named-constants"
+    },
+    "result": {
+        "title": "Named constant",
+        "description": "**Type**: `int`\n\n0 if the last G-, M- or T-command on this input channel was successful, 1 if it returned a warning, 2 or greater if it returned an error, or -1 if it was a blocking M291 message box command that had a Cancel button and either the Cancel button was pressed or the message box timed out. Meta commands do not change 'result'.\n\n In RRF 3.5.0-rc3 and earlier, pressing 'Cancel' or M291 timing out will cancel the current job/macro, and any subsequent lines in the job/macro are not processed, rather than set result to -1. See [this discussion on the Duet3D forums](https://forum.duet3d.com/topic/34945/meta-gcode-result-variable-inconsistent-with-docs) for a workaround. Note that DSF 3.5 and 3.6 do not update the `result` constant when a G-code is interpreted by DSF or third-party plugins.",
+        "anchor": "#named-constants"
+    },
+    "true": {
+        "title": "Named constant",
+        "description": "**Type**: `bool`\n\nBoolean true",
+        "anchor": "#named-constants"
+    },
+    "var": {
+        "title": "Local variable declaration",
+        "description": "`var <new-variable-name> = <expression>`\n\nThis creates a new variable called _var.<new-variable-name>_ and initializes it to _<expression>_. The name must not already be in use. The scope of a local name is the remainder of the block in which it is declared.",
+        "anchor": "#local-variable-declaration"
+    },
+    "global": {
+        "title": "Global variable declaration",
+        "description": "`global <new-variable-name> = <expression>`\n\nThis creates a new variable called _global.<new-variable-name>_ and initializes it to _<expression>_. The name must not already be in use.\n\nExample:\n`global T1heat=0`",
+        "anchor": "#global-variable-declaration"
+    },
+    "set": {
+        "title": "Variable assignment",
+        "description": "`set var.<existing-local-variable-name> = <expression>`\n`set global.<existing-global-variable-name> = <expression>`\n\nThis re-assigns an existing variable (which must be of the form `var.name` or `global.name`) to have the value `expression`.\n\n Example:\n`set global.T1heat=heat.heaters[1].active`",
+        "anchor": "#variable-assignment"
+    }
+}

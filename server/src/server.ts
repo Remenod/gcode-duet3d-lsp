@@ -32,6 +32,33 @@ try {
   connection.console.error(`An Error occurred during loading RRF G-Code Dictionary: ${error}`);
 }
 
+const metaDataPath = path.join(__dirname, '../data/gcode-meta-commands.json');
+let metaData: Record<string, GCodeDoc> = {};
+
+try {
+  metaData = JSON.parse(fs.readFileSync(metaDataPath, 'utf8'));
+} catch (error) {
+  connection.console.error(`An Error occurred during loading RRF Meta Commands Dictionary: ${error}`);
+}
+
+const operatorsDataPath = path.join(__dirname, '../data/gcode-operators.json');
+let operatorsData: Record<string, GCodeDoc> = {};
+
+try {
+  operatorsData = JSON.parse(fs.readFileSync(operatorsDataPath, 'utf8'));
+} catch (error) {
+  connection.console.error(`An Error occurred during loading RRF Operators Dictionary: ${error}`);
+}
+
+const functionsDataPath = path.join(__dirname, '../data/gcode-functions.json');
+let functionsData: Record<string, GCodeDoc> = {};
+
+try {
+  functionsData = JSON.parse(fs.readFileSync(functionsDataPath, 'utf8'));
+} catch (error) {
+  connection.console.error(`An Error occurred during loading RRF Functions Dictionary: ${error}`);
+}
+
 connection.onInitialize((params: InitializeParams) => {
   return {
     capabilities: {
@@ -50,47 +77,139 @@ connection.onHover((params: HoverParams): Hover | null => {
   const lines = text.split(/\r?\n/);
   const line = lines[position.line];
 
-  const wordMatch = /\b(?:[GM]\d+(?:\.\d+)?|T(?:-?\d+)?)\b/gi;
+  const wordMatch = /(?:;.*)|"(?:[^"]|"")*"|'[^']*'|\b(?:0x[0-9a-fA-F]+|0b[01]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b|\b(?:[GM]\d+(?:\.\d+)?|T(?:-?\d+)?|[a-zA-Z]+)\b|>>>|>>|==|!=|<=|>=|&&|\|\||\?|[!+\-#*/=<>&|^]/gi;
   let match;
 
   while ((match = wordMatch.exec(line)) !== null) {
     const start = match.index;
     const end = start + match[0].length;
+    const rawMatch = match[0];
 
-    if (position.character >= start && position.character <= end) {
-      const command = match[0].toUpperCase();
+    if (rawMatch.startsWith(';'))
+      break;
 
-      if (command.startsWith('T') && command.length > 1) {
-        const toolNumber = parseInt(command.substring(1));
+    if (position.character < start || position.character > end)
+      continue;
+
+    // ===========Literals==========
+
+    // 1. String Literal
+    if (rawMatch.startsWith('"')) {
+      return {
+        contents: { kind: MarkupKind.Markdown, value: `### String Literal\n---\n**Value:** \`${rawMatch}\`\n\nStrings are limited to 100 characters. Use \`""\` to include a quote inside.` },
+        range: { start: { line: position.line, character: start }, end: { line: position.line, character: end } }
+      };
+    }
+
+    // 2. Character Literal
+    if (rawMatch.startsWith("'")) {
+      return {
+        contents: { kind: MarkupKind.Markdown, value: `### Character Literal\n---\n**Value:** \`${rawMatch}\`\n\n*(Supported in RRF 3.5.0 and later)*` },
+        range: { start: { line: position.line, character: start }, end: { line: position.line, character: end } }
+      };
+    }
+
+    // 3. Number Literals (Int, Float, Hex, Bin)
+    if (/^(?:0x[0-9a-fA-F]+|0b[01]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)$/i.test(rawMatch)) {
+      let type = "Integer";
+      let details = "Decimal format.";
+
+      if (rawMatch.toLowerCase().startsWith('0x')) {
+        type = "Integer (Hexadecimal)";
+        details = "Hexadecimal format.";
+      } else if (rawMatch.toLowerCase().startsWith('0b')) {
+        type = "Integer (Binary)";
+        details = "Binary format.";
+      } else if (rawMatch.includes('.') || rawMatch.toLowerCase().includes('e')) {
+        type = "Float";
+        details = rawMatch.toLowerCase().includes('e') ? "Scientific format." : "Fixed-point simple format.";
+      }
+
+      return {
+        contents: { kind: MarkupKind.Markdown, value: `### ${type} Literal\n---\n**Value:** \`${rawMatch}\`\n\n${details}` },
+        range: { start: { line: position.line, character: start }, end: { line: position.line, character: end } }
+      };
+    }
+    // =============================
+
+    if (line[end] === '.' && (rawMatch === 'var' || rawMatch === 'global' || rawMatch === 'param'))
+      continue;
+
+    if (rawMatch === '>>>' || rawMatch === '>>')
+      continue;
+
+    if (rawMatch === '>') {
+      const textBefore = line.substring(0, start);
+      if (/\becho\s*$/i.test(textBefore))
+        continue;
+    }
+
+    let doc = null;
+    let baseUrl = "";
+    let command = "";
+
+    if (/^(?:[GM]\d+(?:\.\d+)?|T-?\d*)$/i.test(rawMatch)) {
+      const commandUpper = rawMatch.toUpperCase();
+
+      if (commandUpper.startsWith('T') && commandUpper.length > 1) {
+        const toolNumber = parseInt(commandUpper.substring(1));
         if (!isNaN(toolNumber) && (toolNumber < -1 || toolNumber > 49))
           return null;
       }
 
-      const docKey = command.startsWith('T') ? 'T' : command;
-
-      const doc = gcodeData[docKey];
+      const docKey = commandUpper.startsWith('T') ? 'T' : commandUpper;
+      doc = gcodeData[docKey];
 
       if (doc) {
-        const baseUrl = "https://docs.duet3d.com/User_manual/Reference/Gcodes";
-
-        const markdownContent = [
-          `### ${command}: ${doc.title}`,
-          `##### [View in Duet3D Documentation](${baseUrl}${doc.anchor})`,
-          `---`,
-          `${doc.description}`
-        ].join('\n\n');
-
-        return {
-          contents: {
-            kind: MarkupKind.Markdown,
-            value: markdownContent
-          },
-          range: {
-            start: { line: position.line, character: start },
-            end: { line: position.line, character: end }
-          }
-        };
+        baseUrl = "https://docs.duet3d.com/User_manual/Reference/Gcodes";
+        command = commandUpper;
       }
+    }
+    else if (/^[a-zA-Z]+$/.test(rawMatch)) {
+      doc = functionsData[rawMatch] ?? metaData[rawMatch];
+
+      if (doc) {
+        baseUrl = "https://docs.duet3d.com/User_manual/Reference/Gcode_meta_commands";
+        command = rawMatch;
+      }
+    }
+    else {
+      let lookupKey = rawMatch;
+
+      if (rawMatch === '&')
+        lookupKey = '&&';
+      else if (rawMatch === '|')
+        lookupKey = '||';
+      else if (rawMatch === '=')
+        if (!(/^\s*(?:var|global|set)\b/i.test(line)))
+          lookupKey = '==';
+
+      doc = operatorsData[lookupKey];
+
+      if (doc) {
+        baseUrl = "https://docs.duet3d.com/User_manual/Reference/Gcode_meta_commands";
+        command = "\"" + rawMatch + "\"";
+      }
+    }
+
+    if (doc) {
+      const markdownContent = [
+        `### ${command}: ${doc.title}`,
+        `##### [View in Duet3D Documentation](${baseUrl}${doc.anchor})`,
+        `---`,
+        `${doc.description}`
+      ].join('\n\n');
+
+      return {
+        contents: {
+          kind: MarkupKind.Markdown,
+          value: markdownContent
+        },
+        range: {
+          start: { line: position.line, character: start },
+          end: { line: position.line, character: end }
+        }
+      };
     }
   }
 

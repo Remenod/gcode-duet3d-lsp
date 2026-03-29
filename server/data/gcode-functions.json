@@ -1,0 +1,165 @@
+{
+    "_meta": {
+        "title": "RRF G-Code Dictionary",
+        "source_url": "https://docs.duet3d.com/User_manual/Reference/Gcode_meta_commands",
+        "license": "CC BY-SA 4.0",
+        "original_author": "Duet3D",
+        "parsed_and_converted_by": "Remenod",
+        "description": "This file contains parsed documentation for functions. Do not remove this _meta block."
+    },
+    "abs": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->float`\n`int->int`\n\nReturns the absolute value of the operand",
+        "anchor": "#functions"
+    },
+    "acos": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->float`\n\nResult is in radians",
+        "anchor": "#functions"
+    },
+    "asin": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->float`\n\nResult is in radians",
+        "anchor": "#functions"
+    },
+    "atan": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->float`\n\nResult is in radians",
+        "anchor": "#functions"
+    },
+    "atan2": {
+        "title": "Function",
+        "description": "**Signature**:\n`(float, float)->float`\n\nResult is in radians",
+        "anchor": "#functions"
+    },
+    "ceil": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->int`\n`float->float`\n\nResult is **int** if it fits in a 32-bit signed integer, else **float** (available in RRF 3.5.0 and later).",
+        "anchor": "#functions"
+    },
+    "cos": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->float`\n\nArgument must be in radians",
+        "anchor": "#functions"
+    },
+    "datetime": {
+        "title": "Function",
+        "description": "**Signature**:\n`int->DateTime`\n`string->DateTime`\n\nConverts a number of seconds from the datum to a **DateTime**, or a string with format \"yyyy-mm-ddThh:mm:ss\" to a **DateTime**. Available in RRF 3.4.0 and later.",
+        "anchor": "#functions"
+    },
+    "degrees": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->float`\n\nConverts radians to degrees",
+        "anchor": "#functions"
+    },
+    "drop": {
+        "title": "Function",
+        "description": "**Signature**:\n`(string, int)->string`\n`(array, int)->array`\n\nReturns all but the first N elements of the first argument, where N is the smaller of the second argument and the length of the first argument (available in RRF 3.6.0 and later).",
+        "anchor": "#functions"
+    },
+    "exists": {
+        "title": "Function",
+        "description": "**Signature**:\n`name->bool`\n\nYields **true** if *name* is a valid variable or object model element name and is not null (available in RRF 3.3.0 and later). Especially useful for testing whether a particular parameter has been provided when a file macro was called.",
+        "anchor": "#functions"
+    },
+    "exp": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->float`\n\nReturns *e* raised to the operand (supported in RRF 3.5.0 and later)",
+        "anchor": "#functions"
+    },
+    "fileexists": {
+        "title": "Function",
+        "description": "**Signature**:\n`string->bool`\n\nYields **true** if the string parameter is the name of a file in the file system (available in RRF 3.5.0 and later).",
+        "anchor": "#functions"
+    },
+    "fileread": {
+        "title": "Function",
+        "description": "**Signature**:\n`(string, int, int, char)->array`\n\nReturns an array of elements read from a single-line CSV or similar file (available in RRF 3.5.0 and later). The string parameter is the name of the file to read. The first integer parameter is the number of elements to skip; the second is the maximum number of elements to read; and the character is the field separator, typically ','. See note at the end of this table.\n\n### Notes\n\nEach element (including each skipped element) must be one of the following:\n\n- a string in double quotes\n- a number in any of the usual integer or floating point formats\n- a character in single quotes\n- empty (in which case a corresponding null element is included in the array).\n\nLeading and trailing spaces and tabs around each element are ignored. If the file cannot be opened and read, or if any elements do not confirm to the above, then the command containing the fileread call will be aborted.\n\nIf the element is a quoted string, then characters within it that match the separator character are not treated as separators, and each consecutive pair of double-quote characters is replaced by a one double quote character.\n\nThe number of array elements returned will be one greater than the number of separator characters found; so an empty file will give rise to an array comprising a single null element.",
+        "anchor": "#functions"
+    },
+    "find": {
+        "title": "Function",
+        "description": "**Signature**:\n`(string, char)->int`\n`(string, string)->int`\n\nReturns the index of the first occurrence of the character in the string, or the index in the first string at which the first occurrence of the second string starts; or -1 if the second argument does not occur in the first argument (available in RRF 3.6.0 and later).",
+        "anchor": "#functions"
+    },
+    "floor": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->int`\n`float->float`\n\nResult is **int** if it fits in a 32-bit signed integer, else **float**",
+        "anchor": "#functions"
+    },
+    "isnan": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->bool`\n\nReturns **true** if the operand is a NaN (Not-a-Number) e.g. *sqrt(-1)*",
+        "anchor": "#functions"
+    },
+    "log": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->float`\n\nReturns the natural logarithm of the operand (supported in RRF 3.5.0 and later)",
+        "anchor": "#functions"
+    },
+    "max": {
+        "title": "Function",
+        "description": "**Signature**:\n`(float, ...)->float`\n`(int, ...)->int`\n\nAccepts 1 or more arguments. If any argument is NaN then the result is NaN.",
+        "anchor": "#functions"
+    },
+    "min": {
+        "title": "Function",
+        "description": "**Signature**:\n`(float, ...)->float`\n`(int, ...)->int`\n\nAccepts 1 or more arguments. If any argument is NaN then the result is NaN.",
+        "anchor": "#functions"
+    },
+    "mod": {
+        "title": "Function",
+        "description": "**Signature**:\n`(int, int)->int`\n`(float, float)->float`\n\nReturns the remainder from dividing the first operand by the second operand",
+        "anchor": "#functions"
+    },
+    "pow": {
+        "title": "Function",
+        "description": "**Signature**:\n`(float, float)->float`\n`(int, int)->int`\n\nReturns the first operand to the power of the second operand  (supported in RRF 3.5.0 and later). The result type is **int** if the operands are int, the second operand is non-negative, and the result fits in an **int**.",
+        "anchor": "#functions"
+    },
+    "radians": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->float`\n\nConverts degrees to radians",
+        "anchor": "#functions"
+    },
+    "random": {
+        "title": "Function",
+        "description": "**Signature**:\n`int->int`\n\nOperand must >= 1. Returns a pseudo-random integer in the range 0 to one less than the operand.\n\n### Notes\n\nThe **random** function uses the hardware true random number generator if the microcontroller provides one. If the microcontroller doesn't provide one then an algorithmic pseudo random number generator is seeded by the system tick counter the first time it is called. The Duet 3 6HC, 6XD and Mini 5+ boards all use microcontrollers that provide a true random number generator.",
+        "anchor": "#functions"
+    },
+    "round": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->int`\n`float->float`\n\nRounds to nearest integer, or to nearest even integer if the fractional part of the operand is exactly one half. Result is **int** if it fits in a 32-bit signed integer, else **float** (available in RRF 3.6.0 and later).",
+        "anchor": "#functions"
+    },
+    "sin": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->float`\n\nArgument must be in radians",
+        "anchor": "#functions"
+    },
+    "sqrt": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->float`\n\nReturns the square root of the operand",
+        "anchor": "#functions"
+    },
+    "square": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->float`\n\nReturns the square of the operand (available in RRF 3.6.0 and later)",
+        "anchor": "#functions"
+    },
+    "take": {
+        "title": "Function",
+        "description": "**Signature**:\n`(string, int)->string`\n`(array, int)->array`\n\nReturns the first N elements of the first argument, where N is the smaller of the second argument and the length of the first argument (available in RRF 3.6.0 and later)",
+        "anchor": "#functions"
+    },
+    "tan": {
+        "title": "Function",
+        "description": "**Signature**:\n`float->float`\n\nArgument must be in radians",
+        "anchor": "#functions"
+    },
+    "vector": {
+        "title": "Function",
+        "description": "**Signature**:\n`(int, X)->array`\n\n(RRF 3.5.0 and later) Returns an array with the number of elements equal to the first operand and each element a copy of the second operand",
+        "anchor": "#functions"
+    }
+}
