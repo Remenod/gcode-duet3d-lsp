@@ -81,5 +81,10 @@
         "title": "Binary infix operator",
         "description": "**Signature**: `(bool,bool)->bool`\n\nLogical OR.\n\n*Note: In RRF, a single `|` can also be used.*",
         "anchor": "#binary-infix-operators"
+    },
+    "?": {
+        "title": "Ternary operator",
+        "description": "The expression `expr1 ? expr2 : expr3` evaluates `expr2` if `expr1` is true, otherwise `expr3`. `expr1` must be Boolean. expr3 may be another ternary expression. The ternary operator has precedence 1.",
+        "anchor": "#ternary-operator"
     }
 }

@@ -77,7 +77,7 @@ connection.onHover((params: HoverParams): Hover | null => {
   const lines = text.split(/\r?\n/);
   const line = lines[position.line];
 
-  const wordMatch = /(?:;.*)|"(?:[^"]|"")*"|'[^']*'|\b(?:0x[0-9a-fA-F]+|0b[01]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b|\b(?:[GM]\d+(?:\.\d+)?|T(?:-?\d+)?|[a-zA-Z]+)\b|>>>|>>|==|!=|<=|>=|&&|\|\||[!+\-#*/=<>&|^]/gi;
+  const wordMatch = /(?:;.*)|"(?:[^"]|"")*"|'[^']*'|\b(?:0x[0-9a-fA-F]+|0b[01]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b|\b(?:[GM]\d+(?:\.\d+)?|T(?:-?\d+)?|[a-zA-Z]+)\b|>>>|>>|==|!=|<=|>=|&&|\|\||\?|[!+\-#*/=<>&|^]/gi;
   let match;
 
   while ((match = wordMatch.exec(line)) !== null) {
