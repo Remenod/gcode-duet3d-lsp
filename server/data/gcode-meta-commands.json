@@ -18,43 +18,43 @@
         "anchor": "#echo-command"
     },
     "false": {
-        "title": "Named constants",
-        "description": "Type bool\n\nBoolean false",
+        "title": "Named constant",
+        "description": "**Type**: `bool`\n\nBoolean false",
         "anchor": "#named-constants"
     },
     "input": {
-        "title": "Named constants",
-        "description": "Type (variable)\n\nThe most recent input from a message box with mode 4, 5, 6 or 7 (see M291 command)",
+        "title": "Named constant",
+        "description": "**Type**: `(variable)`\n\nThe most recent input from a message box with mode 4, 5, 6 or 7 (see M291 command)",
         "anchor": "#named-constants"
     },
     "iterations": {
-        "title": "Named constants",
-        "description": "Type int\n\nThe number of completed iterations of the innermost loop",
+        "title": "Named constant",
+        "description": "**Type**: `int`\n\nThe number of completed iterations of the innermost loop",
         "anchor": "#named-constants"
     },
     "line": {
-        "title": "Named constants",
-        "description": "Type int\n\nThe current line number in the file being executed",
+        "title": "Named constant",
+        "description": "**Type**: `int`\n\nThe current line number in the file being executed",
         "anchor": "#named-constants"
     },
     "null": {
-        "title": "Named constants",
-        "description": "Type object\n\nThe null object",
+        "title": "Named constant",
+        "description": "**Type**: `object`\n\nThe null object",
         "anchor": "#named-constants"
     },
     "pi": {
-        "title": "Named constants",
-        "description": "Type float\n\nPi (3.14159265...)",
+        "title": "Named constant",
+        "description": "**Type**: `float`\n\nPi (3.14159265...)",
         "anchor": "#named-constants"
     },
     "result": {
-        "title": "Named constants",
-        "description": "Type int\n\n0 if the last G-, M- or T-command on this input channel was successful, 1 if it returned a warning, 2 or greater if it returned an error, or -1 if it was a blocking M291 message box command that had a Cancel button and either the Cancel button was pressed or the message box timed out. Meta commands do not change 'result'.\n\n In RRF 3.5.0-rc3 and earlier, pressing 'Cancel' or M291 timing out will cancel the current job/macro, and any subsequent lines in the job/macro are not processed, rather than set result to -1. See [this discussion on the Duet3D forums](https://forum.duet3d.com/topic/34945/meta-gcode-result-variable-inconsistent-with-docs) for a workaround. Note that DSF 3.5 and 3.6 do not update the `result` constant when a G-code is interpreted by DSF or third-party plugins.",
+        "title": "Named constant",
+        "description": "**Type**: `int`\n\n0 if the last G-, M- or T-command on this input channel was successful, 1 if it returned a warning, 2 or greater if it returned an error, or -1 if it was a blocking M291 message box command that had a Cancel button and either the Cancel button was pressed or the message box timed out. Meta commands do not change 'result'.\n\n In RRF 3.5.0-rc3 and earlier, pressing 'Cancel' or M291 timing out will cancel the current job/macro, and any subsequent lines in the job/macro are not processed, rather than set result to -1. See [this discussion on the Duet3D forums](https://forum.duet3d.com/topic/34945/meta-gcode-result-variable-inconsistent-with-docs) for a workaround. Note that DSF 3.5 and 3.6 do not update the `result` constant when a G-code is interpreted by DSF or third-party plugins.",
         "anchor": "#named-constants"
     },
     "true": {
-        "title": "Named constants",
-        "description": "Type bool\n\nBoolean true",
+        "title": "Named constant",
+        "description": "**Type**: `bool`\n\nBoolean true",
         "anchor": "#named-constants"
     }
 }
