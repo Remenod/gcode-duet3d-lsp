@@ -77,7 +77,7 @@ connection.onHover((params: HoverParams): Hover | null => {
   const lines = text.split(/\r?\n/);
   const line = lines[position.line];
 
-  const wordMatch = /\b(?:[GM]\d+(?:\.\d+)?|T(?:-?\d+)?|[a-zA-Z]+)\b|>>>|>>|==|!=|<=|>=|&&|\|\||[!+\-#*/=<>&|^]/gi;
+  const wordMatch = /"(?:[^"]|"")*"|'[^']*'|\b(?:0x[0-9a-fA-F]+|0b[01]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b|\b(?:[GM]\d+(?:\.\d+)?|T(?:-?\d+)?|[a-zA-Z]+)\b|>>>|>>|==|!=|<=|>=|&&|\|\||[!+\-#*/=<>&|^]/gi;
   let match;
 
   while ((match = wordMatch.exec(line)) !== null) {
@@ -88,6 +88,47 @@ connection.onHover((params: HoverParams): Hover | null => {
       continue;
 
     const rawMatch = match[0];
+
+    // ===========Literals==========
+
+    // 1. String Literal
+    if (rawMatch.startsWith('"')) {
+      return {
+        contents: { kind: MarkupKind.Markdown, value: `### String Literal\n---\n**Value:** \`${rawMatch}\`\n\nStrings are limited to 100 characters. Use \`""\` to include a quote inside.` },
+        range: { start: { line: position.line, character: start }, end: { line: position.line, character: end } }
+      };
+    }
+
+    // 2. Character Literal
+    if (rawMatch.startsWith("'")) {
+      return {
+        contents: { kind: MarkupKind.Markdown, value: `### Character Literal\n---\n**Value:** \`${rawMatch}\`\n\n*(Supported in RRF 3.5.0 and later)*` },
+        range: { start: { line: position.line, character: start }, end: { line: position.line, character: end } }
+      };
+    }
+
+    // 3. Number Literals (Int, Float, Hex, Bin)
+    if (/^(?:0x[0-9a-fA-F]+|0b[01]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)$/i.test(rawMatch)) {
+      let type = "Integer";
+      let details = "Decimal format.";
+
+      if (rawMatch.toLowerCase().startsWith('0x')) {
+        type = "Integer (Hexadecimal)";
+        details = "Hexadecimal format.";
+      } else if (rawMatch.toLowerCase().startsWith('0b')) {
+        type = "Integer (Binary)";
+        details = "Binary format.";
+      } else if (rawMatch.includes('.') || rawMatch.toLowerCase().includes('e')) {
+        type = "Float";
+        details = rawMatch.toLowerCase().includes('e') ? "Scientific format." : "Fixed-point simple format.";
+      }
+
+      return {
+        contents: { kind: MarkupKind.Markdown, value: `### ${type} Literal\n---\n**Value:** \`${rawMatch}\`\n\n${details}` },
+        range: { start: { line: position.line, character: start }, end: { line: position.line, character: end } }
+      };
+    }
+    // =============================
 
     if (line[end] === '.' && (rawMatch === 'var' || rawMatch === 'global' || rawMatch === 'param'))
       continue;
