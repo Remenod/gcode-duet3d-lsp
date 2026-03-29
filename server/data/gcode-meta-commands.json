@@ -56,5 +56,20 @@
         "title": "Named constant",
         "description": "**Type**: `bool`\n\nBoolean true",
         "anchor": "#named-constants"
+    },
+    "var": {
+        "title": "Local variable declaration",
+        "description": "`var <new-variable-name> = <expression>`\n\nThis creates a new variable called _var.<new-variable-name>_ and initializes it to _<expression>_. The name must not already be in use. The scope of a local name is the remainder of the block in which it is declared.",
+        "anchor": "#local-variable-declaration"
+    },
+    "global": {
+        "title": "Global variable declaration",
+        "description": "`global <new-variable-name> = <expression>`\n\nThis creates a new variable called _global.<new-variable-name>_ and initializes it to _<expression>_. The name must not already be in use.\n\nExample:\n`global T1heat=0`",
+        "anchor": "#global-variable-declaration"
+    },
+    "set": {
+        "title": "Variable assignment",
+        "description": "`set var.<existing-local-variable-name> = <expression>`\n`set global.<existing-global-variable-name> = <expression>`\n\nThis re-assigns an existing variable (which must be of the form `var.name` or `global.name`) to have the value `expression`.\n\n Example:\n`set global.T1heat=heat.heaters[1].active`",
+        "anchor": "#variable-assignment"
     }
 }

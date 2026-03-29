@@ -75,6 +75,9 @@ connection.onHover((params: HoverParams): Hover | null => {
     const start = match.index;
     const end = start + match[0].length;
 
+    if (line[end] === '.' && (match[0] === 'var' || match[0] === 'global' || match[0] === 'param'))
+      continue;
+
     if (position.character >= start && position.character <= end) {
       const rawMatch = match[0];
 
