@@ -41,6 +41,15 @@ try {
   connection.console.error(`An Error occurred during loading RRF Meta Commands Dictionary: ${error}`);
 }
 
+const operatorsDataPath = path.join(__dirname, '../data/gcode-operators.json');
+let operatorsData: Record<string, GCodeDoc> = {};
+
+try {
+  operatorsData = JSON.parse(fs.readFileSync(operatorsDataPath, 'utf8'));
+} catch (error) {
+  connection.console.error(`An Error occurred during loading RRF Operators Dictionary: ${error}`);
+}
+
 connection.onInitialize((params: InitializeParams) => {
   return {
     capabilities: {
@@ -59,7 +68,7 @@ connection.onHover((params: HoverParams): Hover | null => {
   const lines = text.split(/\r?\n/);
   const line = lines[position.line];
 
-  const wordMatch = /\b(?:[GM]\d+(?:\.\d+)?|T(?:-?\d+)?|[a-zA-Z]+)\b/gi;
+  const wordMatch = /\b(?:[GM]\d+(?:\.\d+)?|T(?:-?\d+)?|[a-zA-Z]+)\b|==|!=|<=|>=|&&|\|\||[!+\-#*/=<>&|^]/gi;
   let match;
 
   while ((match = wordMatch.exec(line)) !== null) {
@@ -90,8 +99,16 @@ connection.onHover((params: HoverParams): Hover | null => {
           command = commandUpper;
         }
       }
-      else {
+      else if (/^[a-zA-Z]+$/.test(rawMatch)) {
         doc = metaData[rawMatch];
+
+        if (doc) {
+          baseUrl = "https://docs.duet3d.com/User_manual/Reference/Gcode_meta_commands";
+          command = rawMatch;
+        }
+      }
+      else {
+        doc = operatorsData[rawMatch];
 
         if (doc) {
           baseUrl = "https://docs.duet3d.com/User_manual/Reference/Gcode_meta_commands";

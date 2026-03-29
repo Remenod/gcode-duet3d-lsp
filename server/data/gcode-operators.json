@@ -1,0 +1,17 @@
+{
+    "!": {
+        "title": "Unary prefix operator",
+        "description": "**Signature**: `bool->bool`\n\nBoolean not",
+        "anchor": "#unary-prefix-operators"
+    },
+    "+": {
+        "title": "Unary prefix/Binary infix operator",
+        "description": "### Unary\n\n**Signatures**:\n`int->int`\n`float->float`\n\nUnary +\n\n`DateTime->int`\n\nConverts a date & time value to a number of seconds since the datum. Available in RRF 3.4 and later.\n\n### Binary\n\n**Signatures**:\n`(int,int)->int`\n`(float,float)->float`\n`(DateTime,int)->DateTime`\n\nAddition. When adding an int to a DateTime the second operand is in seconds\n",
+        "anchor": "#unary-prefix-operators"
+    },
+    "-": {
+        "title": "Unary prefix/Binary infix operator",
+        "description": "### Unary\n\n**Signatures**:\n`int->int`\n`float->float`\n\nUnary -\n\n### Binary\n\n**Signatures**:\n`(int,int)->int`\n`(float,float)->float`\n`(DateTime,DateTime)->int`\n`(DateTime,int)->DateTime`\n\nSubtraction. For DateTime values the result or operand is expressed in seconds.\n",
+        "anchor": "#unary-prefix-operators"
+    }
+}
