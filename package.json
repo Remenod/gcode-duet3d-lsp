@@ -6,6 +6,7 @@
   "license": "GPL-3.0-only",
   "version": "0.2.0",
   "publisher": "remenod",
+  "icon": "icon.png",
   "categories": [
     "Programming Languages"
   ],
