@@ -1,7 +1,7 @@
 {
   "name": "rrf-lsp-vscode",
-  "displayName": "RRF G-Code Support",
-  "description": "G-code Duet3D RRF Language Server",
+  "displayName": "RepRapFirmware G-Code LSP",
+  "description": "Language support, hover documentation and more for RepRapFirmware (Duet3D) G-code files.",
   "author": "remenod",
   "license": "GPL-3.0-only",
   "version": "0.2.0",
@@ -16,6 +16,13 @@
     "type": "git",
     "url": "https://github.com/Remenod/rrf-lsp-vscode"
   },
+  "keywords": [
+    "gcode",
+    "reprapfirmware",
+    "duet3d",
+    "3d-printing",
+    "cnc"
+  ],
   "activationEvents": [
     "onLanguage:rrf-gcode",
     "onLanguage:gcode"
