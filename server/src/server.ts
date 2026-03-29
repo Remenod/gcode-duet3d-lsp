@@ -50,6 +50,15 @@ try {
   connection.console.error(`An Error occurred during loading RRF Operators Dictionary: ${error}`);
 }
 
+const functionsDataPath = path.join(__dirname, '../data/gcode-functions.json');
+let functionsData: Record<string, GCodeDoc> = {};
+
+try {
+  functionsData = JSON.parse(fs.readFileSync(functionsDataPath, 'utf8'));
+} catch (error) {
+  connection.console.error(`An Error occurred during loading RRF Functions Dictionary: ${error}`);
+}
+
 connection.onInitialize((params: InitializeParams) => {
   return {
     capabilities: {
@@ -112,7 +121,7 @@ connection.onHover((params: HoverParams): Hover | null => {
         }
       }
       else if (/^[a-zA-Z]+$/.test(rawMatch)) {
-        doc = metaData[rawMatch];
+        doc = functionsData[rawMatch] ?? metaData[rawMatch];
 
         if (doc) {
           baseUrl = "https://docs.duet3d.com/User_manual/Reference/Gcode_meta_commands";
