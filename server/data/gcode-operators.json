@@ -13,5 +13,65 @@
         "title": "Unary prefix/Binary infix operator",
         "description": "### Unary\n\n**Signatures**:\n`int->int`\n`float->float`\n\nUnary -\n\n### Binary\n\n**Signatures**:\n`(int,int)->int`\n`(float,float)->float`\n`(DateTime,DateTime)->int`\n`(DateTime,int)->DateTime`\n\nSubtraction. For DateTime values the result or operand is expressed in seconds.\n",
         "anchor": "#unary-prefix-operators"
+    },
+    "#": {
+        "title": "Unary prefix operator",
+        "description": "**Signatures**: `X[]->int` `string->int`\n\nNumber of elements in array, or number of characters in string",
+        "anchor": "#unary-prefix-operators"
+    },
+    "*": {
+        "title": "Binary infix operator",
+        "description": "**Signatures**: `(int,int)->int` `(float,float)->float`\n\nMultiplication\n\n**Caution!** The multiplication operator * will work when it is used anywhere inside an expression or subexpression enclosed in { } but not otherwise. This is because the * character in a line of GCode normally introduces an end-of-line checksum.",
+        "anchor": "#binary-infix-operators"
+    },
+    "/": {
+        "title": "Binary infix operator",
+        "description": "**Signature**: `(float,float)->float`\n\nDivision",
+        "anchor": "#binary-infix-operators"
+    },
+    "!=": {
+        "title": "Binary infix operator",
+        "description": "**Signature**: `(X,X)->bool`\n\nInequality (X stands for any type). Either the two operands must have the same type or one of them must be the constant **null**.",
+        "anchor": "#binary-infix-operators"
+    },
+    "<": {
+        "title": "Binary infix operator",
+        "description": "**Signatures**: `(int,int)->bool` `(float,float)->bool`\n\nLess than",
+        "anchor": "#binary-infix-operators"
+    },
+    "<=": {
+        "title": "Binary infix operator",
+        "description": "**Signatures**: `(int,int)->bool` `(float,float)->bool`\n\nLess than or equal",
+        "anchor": "#binary-infix-operators"
+    },
+    ">": {
+        "title": "Binary infix operator",
+        "description": "**Signatures**: `(int,int)->bool` `(float,float)->bool`\n\nGreater than",
+        "anchor": "#binary-infix-operators"
+    },
+    ">=": {
+        "title": "Binary infix operator",
+        "description": "**Signatures**: `(int,int)->bool` `(float,float)->bool`\n\nGreater than or equal",
+        "anchor": "#binary-infix-operators"
+    },
+    "^": {
+        "title": "Binary infix operator",
+        "description": "**Signature**: `(string,string)->string`\n\nString concatenation",
+        "anchor": "#binary-infix-operators"
+    },
+    "==": {
+        "title": "Binary infix operator",
+        "description": "**Signature**: `(X,X)->bool`\n\nEquality (X stands for any type). Either the two operands must have the same type or one of them must be the constant `null`.",
+        "anchor": "#binary-infix-operators"
+    },
+    "&&": {
+        "title": "Binary infix operator",
+        "description": "**Signature**: `(bool,bool)->bool`\n\nLogical AND.\n\n*Note: In RRF, a single `&` can also be used.*",
+        "anchor": "#binary-infix-operators"
+    },
+    "||": {
+        "title": "Binary infix operator",
+        "description": "**Signature**: `(bool,bool)->bool`\n\nLogical OR.\n\n*Note: In RRF, a single `|` can also be used.*",
+        "anchor": "#binary-infix-operators"
     }
 }
