@@ -75,10 +75,10 @@ connection.onHover((params: HoverParams): Hover | null => {
 
         const markdownContent = [
           `### ${command}: ${doc.title}`,
+          `##### [View in Duet3D Documentation](${baseUrl}${doc.anchor})`,
           `---`,
-          `${doc.description}`,
-          `\n[See on docs.duet3d](${baseUrl}${doc.anchor})`
-        ].join('\n');
+          `${doc.description}`
+        ].join('\n\n');
 
         return {
           contents: {
