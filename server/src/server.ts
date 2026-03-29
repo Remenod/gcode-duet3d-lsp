@@ -68,18 +68,27 @@ connection.onHover((params: HoverParams): Hover | null => {
   const lines = text.split(/\r?\n/);
   const line = lines[position.line];
 
-  const wordMatch = /\b(?:[GM]\d+(?:\.\d+)?|T(?:-?\d+)?|[a-zA-Z]+)\b|==|!=|<=|>=|&&|\|\||[!+\-#*/=<>&|^]/gi;
+  const wordMatch = /\b(?:[GM]\d+(?:\.\d+)?|T(?:-?\d+)?|[a-zA-Z]+)\b|>>>|>>|==|!=|<=|>=|&&|\|\||[!+\-#*/=<>&|^]/gi;
   let match;
 
   while ((match = wordMatch.exec(line)) !== null) {
     const start = match.index;
     const end = start + match[0].length;
+    const rawMatch = match[0];
 
     if (line[end] === '.' && (match[0] === 'var' || match[0] === 'global' || match[0] === 'param'))
       continue;
 
+    if (rawMatch === '>>>' || rawMatch === '>>')
+      continue;
+
+    if (rawMatch === '>') {
+      const textBefore = line.substring(0, start);
+      if (/\becho\s*$/i.test(textBefore))
+        continue;
+    }
+
     if (position.character >= start && position.character <= end) {
-      const rawMatch = match[0];
 
       let doc = null;
       let baseUrl = "";
