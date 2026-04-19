@@ -1,17 +1,29 @@
 // parser/expression.ts
-// Validation-only recursive-descent parser mirroring ExpressionParser::ParseInternal().
-// Does NOT evaluate — it walks the token stream and collects parse errors.
 
-import { Token, TokenType, FUNCTION_NAMES, NAMED_CONSTANTS } from './types';
+import { Token, TokenType } from './types';
 
 export interface ParseError {
   message: string;
-  start: number;   // character offset in line
+  start: number;
   end: number;
   line: number;
+  severity?: 'error' | 'warning' | 'information';
 }
 
-// ── Operator priorities (mirrors ExpressionParser.cpp operators string "?^&|!=<>+-*/") ──
+export interface DiagnosticContext {
+  symbolTable: {
+    lookupVarAtLine(name: string, uri: string, refLine: number, refIndent: number): unknown | undefined;
+    lookupGlobal(name: string): unknown | undefined;
+    getAllDeclsForName(name: string, uri: string): Array<{ indent: number; line: number }>;
+    getAllGlobalDecls(name: string): Array<{ uri: string; line: number }>;
+    getGlobalDeclsInFile(name: string, uri: string): Array<{ line: number }>;
+  };
+  uri: string;
+  line: number;
+  indent: number;
+  isValidOmPath?: (path: string) => boolean;
+}
+
 const BINARY_OPS = new Map<TokenType, number>([
   [TokenType.Ternary, 1],      // ?
   [TokenType.Caret, 2],        // ^ (string concat)
@@ -78,7 +90,17 @@ export class ExpressionValidator {
   // ── Entry: validate the whole expression ──────────────────────────────────
   validate(): ParseError[] {
     this.parseInternal(0);
-    // Expect EOF after expression (for expression-only contexts)
+    return this.errors;
+  }
+
+  validateCommaList(): ParseError[] {
+    if (this.current().type === TokenType.EOF) return this.errors;
+    this.parseInternal(0);
+    while (this.current().type === TokenType.Comma) {
+      this.advance();
+      if (this.current().type === TokenType.EOF) break;
+      this.parseInternal(0);
+    }
     return this.errors;
   }
 
@@ -239,12 +261,27 @@ export class ExpressionValidator {
     this.parseTrailingIndexes();
   }
 
-  // ── Trailing [ ] index operators ──────────────────────────────────────────
+  // Handles chains like: axes[0].homed  or  probes[0].value[0]
+  // Also accepts FunctionName tokens as field names (e.g. "max" in axes[0].max).
   private parseTrailingIndexes(): void {
-    while (this.current().type === TokenType.LBracket) {
-      this.advance();
-      this.parseInternal(0);
-      this.expect(TokenType.RBracket, "expected ']'");
+    for (; ;) {
+      if (this.current().type === TokenType.LBracket) {
+        this.advance();
+        this.parseInternal(0);
+        this.expect(TokenType.RBracket, "expected ']'");
+      } else if (this.current().type === TokenType.Dot) {
+        this.advance();
+        const ft = this.current();
+        if (
+          ft.type === TokenType.Identifier ||
+          ft.type === TokenType.FunctionName ||    // e.g. axes[0].max
+          this.isKnownWordToken(ft)
+        ) {
+          this.advance();
+        }
+      } else {
+        break;
+      }
     }
   }
 
@@ -282,8 +319,8 @@ export class ExpressionValidator {
     return false;
   }
 
-  private addError(message: string, tok: Token): void {
-    this.errors.push({ message, start: tok.start, end: tok.end, line: tok.line });
+  private addError(message: string, tok: Token, severity: ParseError['severity'] = 'error'): void {
+    this.errors.push({ message, start: tok.start, end: tok.end, line: tok.line, severity });
   }
 
   private isAlpha(t: Token): boolean {
@@ -292,52 +329,255 @@ export class ExpressionValidator {
   }
 
   private isKnownWordToken(t: Token): boolean {
-    // Tokens that are valid expression starts even though they have specific types
     return t.type >= TokenType.True && t.type <= TokenType.Input;
   }
 }
 
-// ── Validate a full line (meta command + optional expression) ─────────────────
-export interface LineValidationResult {
-  errors: ParseError[];
-  exprStart?: number;   // column where the expression starts (for hover etc.)
-}
-
-export function validateLine(tokens: Token[], lineText: string): ParseError[] {
+// ── Full-line validation ───────────────────────────────────────────────────────
+export function validateLine(tokens: Token[], lineText: string, ctx?: DiagnosticContext): ParseError[] {
   const errors: ParseError[] = [];
   if (!tokens.length) return errors;
 
   const first = tokens[0];
+  if (first.type === TokenType.EOF || first.type === TokenType.Comment) return errors;
 
-  // Meta commands that take an expression
-  const expressionMeta = new Set([
-    TokenType.If, TokenType.Elif, TokenType.While,
-    TokenType.Set, TokenType.Echo, TokenType.Var, TokenType.Global,
-  ]);
-
-  // Check bracket balance over the whole line
   checkBracketBalance(tokens, errors);
 
-  if (expressionMeta.has(first.type)) {
-    // Skip to expression part (after the keyword and optional variable name for var/global/set)
+  // ── echo ─────────────────────────────────────────────────────────────────
+  if (first.type === TokenType.Echo) {
     let exprStart = 1;
-    if (first.type === TokenType.Var || first.type === TokenType.Global) {
-      // var <name> = <expr>   or   global <name> = <expr>
-      if (tokens[1]?.type === TokenType.Identifier) exprStart = 2;
-      if (tokens[exprStart]?.type === TokenType.Eq) exprStart++;
-    } else if (first.type === TokenType.Set) {
-      // set <name> = <expr>
-      if (tokens[1]?.type === TokenType.Identifier) exprStart = 2;
-      if (tokens[exprStart]?.type === TokenType.Eq) exprStart++;
+    const redirectTok = tokens[exprStart];
+    if (
+      redirectTok?.type === TokenType.Gt ||
+      redirectTok?.type === TokenType.DoubleGt ||
+      redirectTok?.type === TokenType.TripleGt
+    ) {
+      exprStart++;
+      const filenameTok = tokens[exprStart];
+      if (filenameTok?.type === TokenType.StringLit) {
+        exprStart++;
+      } else if (filenameTok && filenameTok.type !== TokenType.EOF) {
+        errors.push({ message: 'expected a quoted filename after redirect operator', ...span(filenameTok) });
+        return errors;
+      }
     }
     const exprTokens = tokens.slice(exprStart);
     if (exprTokens.length > 0 && exprTokens[0].type !== TokenType.EOF) {
-      const v = new ExpressionValidator(exprTokens);
-      errors.push(...v.validate());
+      errors.push(...new ExpressionValidator(exprTokens).validateCommaList());
+      if (ctx?.isValidOmPath) errors.push(...checkBareIdentifiers(exprTokens, ctx));
     }
+    return errors;
+  }
+
+  // ── if / elif / while / abort ─────────────────────────────────────────────
+  if (
+    first.type === TokenType.If ||
+    first.type === TokenType.Elif ||
+    first.type === TokenType.While ||
+    first.type === TokenType.Abort
+  ) {
+    const exprTokens = tokens.slice(1);
+    if (exprTokens.length > 0 && exprTokens[0].type !== TokenType.EOF) {
+      errors.push(...new ExpressionValidator(exprTokens).validate());
+      if (ctx?.isValidOmPath) errors.push(...checkBareIdentifiers(exprTokens, ctx));
+    }
+    return errors;
+  }
+
+  // ── var <n> = <expr> ──────────────────────────────────────────────────────
+  if (first.type === TokenType.Var) {
+    const nameTok = tokens[1];
+    if (!nameTok || nameTok.type !== TokenType.Identifier) {
+      errors.push({ message: "expected a variable name after 'var'", ...span(first) });
+      return errors;
+    }
+    if (ctx) {
+      const decls = ctx.symbolTable.getAllDeclsForName(nameTok.value, ctx.uri);
+      for (const d of decls) {
+        if (d.indent === ctx.indent && d.line < ctx.line) {
+          errors.push({
+            message: `variable '${nameTok.value}' already declared in this scope (line ${d.line + 1})`,
+            ...span(nameTok),
+          });
+          break;
+        }
+      }
+    }
+    let exprStart = 2;
+    if (tokens[exprStart]?.type === TokenType.Eq) exprStart++;
+    const exprTokens = tokens.slice(exprStart);
+    if (exprTokens.length > 0 && exprTokens[0].type !== TokenType.EOF) {
+      errors.push(...new ExpressionValidator(exprTokens).validate());
+      // Also warn on bare unknown identifiers in the RHS expression
+      if (ctx?.isValidOmPath) errors.push(...checkBareIdentifiers(exprTokens, ctx));
+    }
+    return errors;
+  }
+
+  // ── global <n> = <expr> ───────────────────────────────────────────────────
+  // No duplicate detection — the common RRF pattern is:
+  //   if !exists(global.x)
+  //     global x = value
+  // Flagging those would always produce false positives.
+  if (first.type === TokenType.Global) {
+    const nameTok = tokens[1];
+    if (!nameTok || nameTok.type !== TokenType.Identifier) {
+      errors.push({ message: "expected a variable name after 'global'", ...span(first) });
+      return errors;
+    }
+    let exprStart = 2;
+    if (tokens[exprStart]?.type === TokenType.Eq) exprStart++;
+    const exprTokens = tokens.slice(exprStart);
+    if (exprTokens.length > 0 && exprTokens[0].type !== TokenType.EOF) {
+      errors.push(...new ExpressionValidator(exprTokens).validate());
+    }
+    return errors;
+  }
+
+  // ── set <var.name | global.name> [<index>] = <expr> ──────────────────────
+  if (first.type === TokenType.Set) {
+    const targetTok = tokens[1];
+
+    if (!targetTok || targetTok.type === TokenType.EOF) {
+      errors.push({ message: "expected 'var.<n>' or 'global.<n>' after 'set'", ...span(first) });
+      return errors;
+    }
+    if (targetTok.type !== TokenType.Identifier) {
+      errors.push({ message: `'set' can only assign to 'var.<n>' or 'global.<n>'`, ...span(targetTok) });
+      return errors;
+    }
+
+    const val = targetTok.value;
+    if (!val.startsWith('var.') && !val.startsWith('global.')) {
+      errors.push({ message: `'set' requires 'var.<n>' or 'global.<n>', got '${val}'`, ...span(targetTok) });
+      return errors;
+    }
+
+    if (val.startsWith('var.') && ctx) {
+      const varName = val.slice(4).split('[')[0];
+      const decl = ctx.symbolTable.lookupVarAtLine(varName, ctx.uri, ctx.line, ctx.indent);
+      if (!decl) {
+        errors.push({
+          severity: 'error',
+          message: `undefined variable 'var.${varName}' — declare it with 'var ${varName} = ...' first`,
+          ...span(targetTok),
+        });
+      }
+    }
+
+    // Undefined global → warning only (may be declared elsewhere or at runtime)
+    if (val.startsWith('global.') && ctx) {
+      const globalName = val.slice(7).split('[')[0];
+      const decl = ctx.symbolTable.lookupGlobal(globalName);
+      if (!decl) {
+        errors.push({
+          severity: 'warning',
+          message: `'global.${globalName}' not found in any open file — it may be declared in another macro or created at runtime`,
+          ...span(targetTok),
+        });
+      }
+    }
+
+    let exprStart = 2;
+    while (tokens[exprStart]?.type === TokenType.LBracket) {
+      let depth = 1; exprStart++;
+      while (exprStart < tokens.length && depth > 0) {
+        const tt = tokens[exprStart].type;
+        if (tt === TokenType.LBracket) depth++;
+        if (tt === TokenType.RBracket) depth--;
+        exprStart++;
+      }
+    }
+    if (tokens[exprStart]?.type === TokenType.Eq) exprStart++;
+    const exprTokens = tokens.slice(exprStart);
+    if (exprTokens.length > 0 && exprTokens[0].type !== TokenType.EOF) {
+      errors.push(...new ExpressionValidator(exprTokens).validate());
+      if (ctx?.isValidOmPath) errors.push(...checkBareIdentifiers(exprTokens, ctx));
+    }
+    return errors;
+  }
+
+  // ── G/M/T code line ───────────────────────────────────────────────────────
+  if (first.type === TokenType.GCode || first.type === TokenType.TCode) {
+    checkAdjacentNumberString(tokens, errors);
+    return errors;
+  }
+
+  // ── Valid no-op line-starts ───────────────────────────────────────────────
+  const noopStarts = new Set([
+    TokenType.Else, TokenType.Break, TokenType.Continue,
+    TokenType.Skip, TokenType.Param,
+  ]);
+  if (noopStarts.has(first.type)) return errors;
+
+  // ── Unknown command ───────────────────────────────────────────────────────
+  if (first.type === TokenType.Identifier || first.type === TokenType.Unknown) {
+    errors.push({ message: `unknown command '${first.value}'`, ...span(first) });
+    return errors;
   }
 
   return errors;
+}
+
+// ── Bare identifier OM check ─────────────────────────────────────────────────
+//
+// Warns when an expression contains a bare identifier that is:
+//   1. Not a qualified name (var./global./param.)
+//   2. Not an OM-known path
+//   3. NOT immediately after a Dot token in the token stream
+//
+// Rule (3) is crucial: in `move.axes[0].homed` the lexer produces:
+//   Identifier("move.axes"), LBracket, Integer, RBracket, Dot, Identifier("homed")
+// "homed" follows a Dot so it is a member name, not a standalone identifier.
+// Similarly `boards[0].vIn.current` → Identifier("boards"), [...], Dot, Identifier("vIn.current")
+// "vIn.current" follows a Dot — skip it.
+//
+// The OM path checking is done on the START of the expression: the first
+// Identifier token before any brackets. The full path check including member
+// access is done in hover.ts (reconstructOmPath). Here we only warn for
+// identifiers that stand alone (not preceded by Dot).
+function checkBareIdentifiers(tokens: Token[], ctx: DiagnosticContext): ParseError[] {
+  const errors: ParseError[] = [];
+  if (!ctx.isValidOmPath) return errors;
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.type !== TokenType.Identifier) continue;
+    const v = t.value;
+    // Skip qualified names — handled separately
+    if (v.startsWith('var.') || v.startsWith('global.') || v.startsWith('param.')) continue;
+    // Skip member names that follow a Dot (they are fields of an OM path, not roots)
+    if (i > 0 && tokens[i - 1]?.type === TokenType.Dot) continue;
+    // Normalise and check the root segment of the path
+    const normalised = v.replace(/\[\d+\]/g, '[]');
+    if (!ctx.isValidOmPath(normalised)) {
+      errors.push({
+        severity: 'warning',
+        message: `'${v}' is not a known Object Model path — did you mean 'var.${v}'?`,
+        ...span(t),
+      });
+    }
+  }
+  return errors;
+}
+
+// ── Adjacent number+string detection ─────────────────────────────────────────
+function checkAdjacentNumberString(tokens: Token[], errors: ParseError[]): void {
+  const numericTypes = new Set([TokenType.Integer, TokenType.Float, TokenType.HexInteger, TokenType.BinInteger]);
+  for (let i = 0; i < tokens.length - 1; i++) {
+    const t = tokens[i];
+    const next = tokens[i + 1];
+    if (
+      numericTypes.has(t.type) &&
+      (next.type === TokenType.StringLit || next.type === TokenType.CharLit) &&
+      t.end === next.start
+    ) {
+      errors.push({
+        message: `invalid syntax: number '${t.value}' directly followed by string literal — insert a space or operator`,
+        start: t.start, end: next.end, line: t.line,
+      });
+    }
+  }
 }
 
 // ── Bracket balance checker ───────────────────────────────────────────────────
@@ -349,11 +589,6 @@ function checkBracketBalance(tokens: Token[], errors: ParseError[]): void {
     [TokenType.LBracket]: TokenType.RBracket,
   };
   const CLOSERS = new Set([TokenType.RParen, TokenType.RBrace, TokenType.RBracket]);
-  const OPENER_FOR: Partial<Record<TokenType, string>> = {
-    [TokenType.RParen]: '(',
-    [TokenType.RBrace]: '{',
-    [TokenType.RBracket]: '[',
-  };
 
   for (const t of tokens) {
     if (t.type === TokenType.EOF || t.type === TokenType.Comment) break;
@@ -361,13 +596,13 @@ function checkBracketBalance(tokens: Token[], errors: ParseError[]): void {
       stack.push(t);
     } else if (CLOSERS.has(t.type)) {
       if (stack.length === 0) {
-        errors.push({ message: `unexpected '${t.value}'`, start: t.start, end: t.end, line: t.line });
+        errors.push({ message: `unexpected '${t.value}'`, ...span(t) });
       } else {
         const open = stack[stack.length - 1];
         if (PAIRS[open.type] !== t.type) {
           errors.push({
             message: `mismatched bracket: expected '${tokenChar(PAIRS[open.type]!)}' but got '${t.value}'`,
-            start: t.start, end: t.end, line: t.line,
+            ...span(t),
           });
           stack.pop();
         } else {
@@ -378,13 +613,13 @@ function checkBracketBalance(tokens: Token[], errors: ParseError[]): void {
   }
 
   for (const unclosed of stack) {
-    errors.push({
-      message: `unclosed '${unclosed.value}'`,
-      start: unclosed.start, end: unclosed.end, line: unclosed.line,
-    });
+    errors.push({ message: `unclosed '${unclosed.value}'`, ...span(unclosed) });
   }
 }
 
+function span(t: Token): { start: number; end: number; line: number } {
+  return { start: t.start, end: t.end, line: t.line };
+}
 function tokenChar(tt: TokenType): string {
   switch (tt) {
     case TokenType.RParen: return ')';

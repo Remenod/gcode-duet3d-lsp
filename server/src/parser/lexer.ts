@@ -7,15 +7,25 @@ import {
     FUNCTION_NAMES, NAMED_CONSTANTS, META_KEYWORDS,
 } from './types';
 
+export interface LexError {
+    message: string;
+    start: number;
+    end: number;
+    line: number;
+}
+
 export class Lexer {
     private pos = 0;
     private readonly src: string;
     private readonly lineNum: number;
+    private readonly _errors: LexError[] = [];
 
     constructor(src: string, lineNum = 0) {
         this.src = src;
         this.lineNum = lineNum;
     }
+
+    get errors(): readonly LexError[] { return this._errors; }
 
     // ── Public entry point ─────────────────────────────────────────────────────
     tokenize(): Token[] {
@@ -204,7 +214,6 @@ export class Lexer {
         }
 
         // Meta keywords (only first segment, e.g. "var" not "var.something")
-        const firstSegment = raw.split('.')[0].toLowerCase();
         if (raw.indexOf('.') === -1 && META_KEYWORDS[lower] !== undefined) {
             return this.make(META_KEYWORDS[lower], raw, start, this.pos);
         }

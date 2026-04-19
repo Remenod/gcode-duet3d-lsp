@@ -1,10 +1,9 @@
 // analysis/hover.ts
-// Token-based hover provider.  Replaces the raw-regex approach in the original server.ts.
 
+import { Hover, MarkupKind } from 'vscode-languageserver/node';
 import { Token, TokenType } from '../parser/types';
-import { FUNCTION_SIGNATURES, NAMED_CONSTANT_DOCS, META_COMMAND_DOCS } from '../data/signatures';
 import { SymbolTable } from './symbolTable';
-import { MarkupKind, Hover } from 'vscode-languageserver/node';
+import { isValidOmPath, getOmPathInfo, isOmIndexAvailable, allOmPaths } from './objectModelIndex';
 
 interface GCodeDoc { title: string; description: string; anchor: string }
 type DocDB = Record<string, GCodeDoc>;
@@ -12,88 +11,46 @@ type DocDB = Record<string, GCodeDoc>;
 export function buildHover(
     tokens: Token[],
     character: number,
-    lineNumber: number,
+    lineNum: number,
     gcodeData: DocDB,
     metaData: DocDB,
     operatorsData: DocDB,
     functionsData: DocDB,
     symbolTable: SymbolTable,
-    documentUri: string,
+    uri: string,
+    lineIndent: number = 0,
 ): Hover | null {
+    const tokIdx = tokens.findIndex(t => t.start <= character && character < t.end);
+    if (tokIdx === -1) return null;
+    const tok = tokens[tokIdx];
 
-    // Find the token under the cursor
-    const tok = tokens.find(t =>
-        t.type !== TokenType.EOF &&
-        t.type !== TokenType.Comment &&
-        character >= t.start &&
-        character <= t.end
-    );
-
-    if (!tok) return null;
-
-    const range = {
-        start: { line: lineNumber, character: tok.start },
-        end: { line: lineNumber, character: tok.end },
-    };
-
-    const md = (value: string): Hover => ({ contents: { kind: MarkupKind.Markdown, value }, range });
-
-    // ── Literals ──────────────────────────────────────────────────────────────
     switch (tok.type) {
-        case TokenType.StringLit: {
-            const len = tok.value.length - 2; // minus quotes (approx)
-            return md(`### String Literal\n---\n**Value:** \`${tok.value}\`\n\nStrings are limited to **100 characters**. Use \`""\` to embed a double-quote.`);
-        }
-        case TokenType.CharLit:
-            return md(`### Character Literal\n---\n**Value:** \`${tok.value}\`\n\n*(Supported in RRF 3.5.0 and later)*`);
-
-        case TokenType.Integer:
-            return md(`### Integer Literal\n---\n**Value:** \`${tok.value}\`\n\nDecimal integer.`);
-        case TokenType.HexInteger:
-            return md(`### Integer Literal (Hexadecimal)\n---\n**Value:** \`${tok.value}\`\n\nEquivalent decimal: \`${parseInt(tok.value, 16)}\``);
-        case TokenType.BinInteger:
-            return md(`### Integer Literal (Binary)\n---\n**Value:** \`${tok.value}\`\n\nEquivalent decimal: \`${parseInt(tok.value.slice(2), 2)}\``);
-        case TokenType.Float:
-            return md(`### Float Literal\n---\n**Value:** \`${tok.value}\`\n\n${tok.value.toLowerCase().includes('e') ? 'Scientific notation.' : 'Fixed-point decimal.'}`);
-
-        // ── Named constants ──────────────────────────────────────────────────────
-        case TokenType.True:
-        case TokenType.False:
-        case TokenType.Null:
-        case TokenType.Pi:
-        case TokenType.Iterations:
-        case TokenType.Line:
-        case TokenType.Result:
-        case TokenType.Input: {
-            const name = tok.value.toLowerCase();
-            const doc = NAMED_CONSTANT_DOCS[name] ?? '';
-            return md(`### \`${name}\`\n---\n${doc}`);
-        }
-
-        // ── G/M/T codes ──────────────────────────────────────────────────────────
+        // ── G / M codes ───────────────────────────────────────────────────────
         case TokenType.GCode: {
-            const key = tok.value.toUpperCase();
-            const data = gcodeData[key];
-            if (!data) return null;
-            return md(formatGCodeDoc(key, data, 'https://docs.duet3d.com/User_manual/Reference/Gcodes'));
-        }
-        case TokenType.TCode: {
-            const data = gcodeData['T'];
-            if (!data) return null;
-            return md(formatGCodeDoc('T', data, 'https://docs.duet3d.com/User_manual/Reference/Gcodes'));
+            const data = gcodeData[tok.value.toUpperCase()];
+            if (!data) return mkHover(`**${tok.value}**\n\n*No documentation found.*`);
+            const anchor = data.anchor
+                ? `\n\n[Documentation](https://docs.duet3d.com/en/User_manual/Reference/Gcodes#${data.anchor})`
+                : '';
+            return mkHover(`**${tok.value}** — ${data.title}\n\n${data.description}${anchor}`);
         }
 
-        // ── Functions ─────────────────────────────────────────────────────────────
+        case TokenType.TCode: {
+            const n = tok.value.slice(1);
+            return mkHover(`**${tok.value}** — Select tool${n ? ` ${n}` : ''}`);
+        }
+
         case TokenType.FunctionName: {
-            const name = tok.value.toLowerCase();
-            // First try JSON data file, then built-in signatures
-            const jsonDoc = functionsData[name] ?? functionsData[tok.value];
-            if (jsonDoc) {
-                return md(formatGCodeDoc(name, jsonDoc, 'https://docs.duet3d.com/User_manual/Reference/Gcode_meta_commands'));
+            // Could be a function call OR a field name after [n]. (e.g. "max" in axes[0].max).
+            // Check if it is preceded by a Dot to disambiguate.
+            if (tokIdx > 0 && tokens[tokIdx - 1]?.type === TokenType.Dot) {
+                // Treat as an OM field — reconstruct path
+                const fullPath = reconstructOmPath(tokens, tokIdx);
+                return buildOmHover(fullPath);
             }
-            const sig = FUNCTION_SIGNATURES[name];
-            if (sig) return md(formatFunctionDoc(sig));
-            return null;
+            const data = functionsData[tok.value.toLowerCase()];
+            if (!data) return mkHover(`**${tok.value}()**\n\n*No documentation found.*`);
+            return mkHover(`**${tok.value}** — ${data.title}\n\n${data.description}`);
         }
 
         // ── Meta keywords ─────────────────────────────────────────────────────────
@@ -110,57 +67,96 @@ export function buildHover(
         case TokenType.Echo:
         case TokenType.Param:
         case TokenType.Skip: {
-            const name = tok.value.toLowerCase();
-            const mData = META_COMMAND_DOCS[name];
-            const jsonDoc = metaData[name] ?? metaData[tok.value];
-            if (jsonDoc) {
-                return md(formatGCodeDoc(name, jsonDoc, 'https://docs.duet3d.com/User_manual/Reference/Gcode_meta_commands'));
-            }
-            if (mData) {
-                return md(`### \`${name}\` — ${mData.title}\n---\n**Syntax:** \`${mData.syntax}\`\n\n${mData.doc}`);
-            }
-            return null;
+            const key = tok.value.toLowerCase();
+            const data = metaData[key];
+            if (!data) return mkHover(`**${tok.value}** — meta command`);
+            return mkHover(`**${tok.value}** — ${data.title}\n\n${data.description}`);
         }
 
-        // ── Operators ─────────────────────────────────────────────────────────────
-        case TokenType.EqEq:
-        case TokenType.NEq:
-        case TokenType.LtEq:
-        case TokenType.GtEq:
-        case TokenType.And:
-        case TokenType.Or:
-        case TokenType.Ternary:
-        case TokenType.Not:
+        // ── Identifiers: var.x, global.x, param.x, object model paths ─────────
+        case TokenType.Identifier: {
+            const val = tok.value;
+
+            if (val.startsWith('var.')) {
+                const name = val.slice(4);
+                const decl = symbolTable.lookupVarAtLine(name, uri, lineNum, lineIndent);
+                if (!decl) {
+                    return mkHover(`**${val}**\n\n⚠️ *Undeclared variable — no \`var ${name} = ...\` found in scope.*`);
+                }
+                return mkHover(
+                    `**${val}**\n\nScope: \`var\` · Type: \`${decl.inferredType ?? 'unknown'}\` · Declared at line ${decl.line + 1} (indent ${decl.indent})`
+                );
+            }
+
+            if (val.startsWith('global.')) {
+                const name = val.slice(7);
+                const decl = symbolTable.lookupGlobal(name);
+                if (!decl) {
+                    return mkHover(
+                        `**${val}**\n\n*Not declared in any open file — may be declared in a closed macro or created at runtime.*`
+                    );
+                }
+                return mkHover(
+                    `**${val}**\n\nScope: \`global\` · Type: \`${decl.inferredType ?? 'unknown'}\` · Declared in \`${shortUri(decl.uri)}\` at line ${decl.line + 1}`
+                );
+            }
+
+            if (val.startsWith('param.')) {
+                const name = val.slice(6);
+                const decl = symbolTable.lookupParam(name, uri);
+                if (!decl) {
+                    return mkHover(`**${val}**\n\n⚠️ *Macro parameter \`${name}\` not declared in this file.*`);
+                }
+                return mkHover(
+                    `**${val}**\n\nScope: \`param\` · Type: \`${decl.inferredType ?? 'unknown'}\` · Declared at line ${decl.line + 1}`
+                );
+            }
+
+            // Bare identifier — reconstruct the full OM path from token context
+            // (handles  sensors.probes[0].value  where the cursor is on "value")
+            const fullPath = reconstructOmPath(tokens, tokIdx);
+            return buildOmHover(fullPath);
+        }
+
+        // ── Named constants ───────────────────────────────────────────────────
+        case TokenType.True:
+        case TokenType.False:
+            return mkHover(`**${tok.value}** — boolean constant`);
+        case TokenType.Null:
+            return mkHover(`**null** — null / no value`);
+        case TokenType.Pi:
+            return mkHover(`**pi** — π ≈ 3.14159265358979`);
+        case TokenType.Iterations:
+            return mkHover(`**iterations** — number of completed iterations of the innermost \`while\` loop`);
+        case TokenType.Line:
+            return mkHover(`**line** — current line number in the executing file`);
+        case TokenType.Result:
+            return mkHover(`**result** — result of the last M-code or G-code command (0 = success)`);
+        case TokenType.Input:
+            return mkHover(`**input** — the value entered by the user in response to an M291 prompt`);
+
+        // ── Operators ─────────────────────────────────────────────────────────
         case TokenType.Plus:
         case TokenType.Minus:
         case TokenType.Star:
         case TokenType.Slash:
         case TokenType.Caret:
-        case TokenType.Hash:
+        case TokenType.EqEq:
+        case TokenType.NEq:
         case TokenType.Lt:
         case TokenType.Gt:
-        case TokenType.Eq: {
-            const opKey = operatorLookupKey(tok);
-            const data = operatorsData[opKey];
-            if (data) {
-                return md(formatGCodeDoc(`"${tok.value}"`, data, 'https://docs.duet3d.com/User_manual/Reference/Gcode_meta_commands'));
-            }
-            return null;
-        }
-
-        // ── Variables (Identifier) ────────────────────────────────────────────────
-        case TokenType.Identifier: {
-            const v = symbolTable.resolveQualified(tok.value, documentUri);
-            if (v) {
-                return md(
-                    `### \`${v.scope}.${v.name}\`\n` +
-                    `---\n` +
-                    `**Scope:** \`${v.scope}\`  \n` +
-                    `**Type:** \`${v.inferredType ?? 'unknown'}\`  \n` +
-                    `**Declared at:** line ${v.line + 1}`
-                );
-            }
-            return null;
+        case TokenType.LtEq:
+        case TokenType.GtEq:
+        case TokenType.And:
+        case TokenType.Or:
+        case TokenType.Not:
+        case TokenType.Ternary:
+        case TokenType.Hash:
+        case TokenType.DoubleGt:
+        case TokenType.TripleGt: {
+            const data = operatorsData[tok.value];
+            if (!data) return null;
+            return mkHover(`**${tok.value}** — ${data.title}\n\n${data.description}`);
         }
 
         default:
@@ -168,39 +164,84 @@ export function buildHover(
     }
 }
 
-// ── Format helpers ─────────────────────────────────────────────────────────────
-function formatGCodeDoc(command: string, doc: GCodeDoc, baseUrl: string): string {
-    return [
-        `### ${command}: ${doc.title}`,
-        `##### [View in Duet3D Documentation](${baseUrl}${doc.anchor})`,
-        `---`,
-        doc.description,
-    ].join('\n\n');
-}
+// ── Object Model path reconstruction ─────────────────────────────────────────
+//
+// The lexer tokenises  sensors.probes[0].value[0]  as:
+//   [Identifier "sensors.probes"] [LBracket] [Integer "0"] [RBracket]
+//   [Dot] [Identifier "value"] [LBracket] [Integer "0"] [RBracket]
+//
+// When the user hovers over "value" (tokIdx=5), we need to walk backwards
+// through the token stream and build the normalised OM path.
+//
+// Result for the example above: "sensors.probes[].value"
+// (we include [] for the subscript of the segment BEFORE the dot, not after,
+//  since the cursor token is the start of the next segment.)
+function reconstructOmPath(tokens: Token[], tokIdx: number): string {
+    const curTok = tokens[tokIdx];
+    // Start with the current token's value (it may already contain dots: "sensors.probes")
+    let segments: string[] = [curTok.value];
 
-function formatFunctionDoc(sig: FUNCTION_SIGNATURES[string]): string {
-    const paramList = sig.params.map(p => p.name).join(', ');
-    const paramDocs = sig.params
-        .map(p => `- \`${p.name}\` *(${p.type ?? 'any'})*: ${p.doc}`)
-        .join('\n');
-    return [
-        `### \`${sig.name}(${paramList})\` → \`${sig.returnType}\``,
-        `---`,
-        sig.doc,
-        paramDocs ? `\n**Parameters:**\n${paramDocs}` : '',
-    ].filter(Boolean).join('\n\n');
-}
+    let i = tokIdx - 1;
 
-// Map token type → operator lookup key for the JSON data files
-function operatorLookupKey(tok: Token): string {
-    switch (tok.type) {
-        case TokenType.And: return '&&';
-        case TokenType.Or: return '||';
-        case TokenType.Eq: return '==';
-        case TokenType.EqEq: return '==';
-        default: return tok.value;
+    while (i >= 0) {
+        const t = tokens[i];
+
+        if (t.type === TokenType.Dot) {
+            // The segment before this dot may be an identifier possibly followed by [n]
+            i--;
+            // Walk back past any trailing subscript(s) of the previous segment
+            let trailingIndex = '';
+            while (i >= 0 && tokens[i].type === TokenType.RBracket) {
+                trailingIndex = '[]' + trailingIndex;
+                i--; // skip ]
+                // skip the index expression
+                let depth = 1;
+                while (i >= 0 && depth > 0) {
+                    if (tokens[i].type === TokenType.RBracket) depth++;
+                    else if (tokens[i].type === TokenType.LBracket) depth--;
+                    i--;
+                }
+            }
+            // Now tokens[i] should be the identifier for this segment
+            if (i >= 0 && (tokens[i].type === TokenType.Identifier || tokens[i].type === TokenType.FunctionName)) {
+                segments.unshift(tokens[i].value + trailingIndex);
+                i--;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
     }
+
+    return segments.join('.');
 }
 
-// Re-export type for import convenience
-type FUNCTION_SIGNATURES = typeof FUNCTION_SIGNATURES;
+// ── Object Model hover ────────────────────────────────────────────────────────
+function buildOmHover(path: string): Hover {
+    const omRef = '\n\nSee [Object Model reference](https://github.com/Duet3D/RepRapFirmware/wiki/Object-Model-Reference).';
+    // Normalise [n] → [] for lookup
+    const normPath = path.replace(/\[\d+\]/g, '[]');
+
+    if (!isOmIndexAvailable()) {
+        return mkHover(`**${path}**\n\nObject Model path — resolved at runtime by RepRapFirmware.${omRef}`);
+    }
+
+    if (isValidOmPath(normPath)) {
+        const info = getOmPathInfo(normPath);
+        const typeStr = info ? ` · Type: \`${info.type}${info.isArray ? '[]' : ''}\`` : '';
+        return mkHover(`**${path}**\n\nObject Model path${typeStr}${omRef}`);
+    }
+
+    return mkHover(
+        `**${path}**\n\n⚠️ *Unknown Object Model path — not found in the static schema.*\n\nIf this is a plugin-provided property it will be resolved at runtime.${omRef}`
+    );
+}
+
+function mkHover(md: string): Hover {
+    return { contents: { kind: MarkupKind.Markdown, value: md } };
+}
+
+function shortUri(uri: string): string {
+    return uri.split('/').slice(-2).join('/');
+}
