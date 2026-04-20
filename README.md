@@ -1,24 +1,28 @@
-# RRF G-code Language Server for vscode
+# RRF G-code Language Server for VS Code
 
 A lightweight Language Server Protocol (LSP) extension for VS Code that provides rich language support for RepRapFirmware (RRF) G-code files.
 
 ## Features
 
-Currently, in version 0.2.0, this extension provides intelligent **Hover Documentation**:
-* Hover over any valid G/M/T-code, literal, function, meta command, operator, etc. to see its full title and description.
-* Includes direct links to the official Duet3D documentation for deep dives.
-* Smart validation: ignores invalid tool numbers (e.g., `T50` or `T-2`).
+Currently, in version 0.3.0, this extension significantly expands its capabilities, offering a comprehensive suite of tools for RRF developers:
+
+* **Intelligent Hover Documentation**: Hover over any valid G/M/T-code, literal, function, meta command, or operator to see its full title and description, including direct links to the official Duet3D documentation.
+* **Autocompletion**: Smart suggestions for commands, parameters, object model, and syntax as you type.
+* **Syntax Highlighting & Validation**: Real-time syntax checking to help catch errors early, alongside improved highlighting for better readability. Includes smart validation (e.g., ignoring invalid tool numbers like `T50` or `T-2`).
+* **Go to Definition**: Quickly navigate to where variables, macros, or specific references are defined.
+* **Variable Renaming**: Safely rename variables across your G-code files.
+* **Duet3D Object Model Support**: Deep integration with the RRF object model, allowing for accurate references and autocompletion of object model properties.
 
 ## Extension Settings
 
 This extension contributes the following settings:
 
-* `rrfgcode.activateOnGenericGcode`: Enable or disable LSP features for generic non RRF gcode files (enabled by default).
+* `rrfgcode.activateOnGenericGcode`: Enable or disable LSP features for generic non-RRF gcode files (enabled by default).
 
 ## Known Issues
 
-* Autocompletion is not yet implemented (planned for future releases).
-* Strict syntax validation and error highlighting are currently limited.
+* **Stability**: Version 0.3.0 introduces a massive increase in functionality. While tested, some of the newer features (like complex syntax validation and deep object model autocompletion) are still stabilizing and might behave unexpectedly in edge cases.
+* Performance optimizations for very large G-code files are ongoing.
 
 ## License 
 

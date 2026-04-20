@@ -3,7 +3,7 @@
   "description": "Client for G-code Duet3D RRF Language Server",
   "author": "remenod",
   "license": "GPL-3.0-only",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
   }
