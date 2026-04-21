@@ -354,10 +354,26 @@ export function validateLine(tokens: Token[], lineText: string, ctx?: Diagnostic
     ) {
       exprStart++;
       const filenameTok = tokens[exprStart];
+
       if (filenameTok?.type === TokenType.StringLit) {
+        // Static filename:  echo >"file.txt" ...
         exprStart++;
+      } else if (filenameTok?.type === TokenType.LBrace) {
+        let depth = 1;
+        exprStart++; // skip the opening {
+        while (exprStart < tokens.length && depth > 0) {
+          const tt = tokens[exprStart].type;
+          if (tt === TokenType.EOF || tt === TokenType.Comment) break;
+          if (tt === TokenType.LBrace) depth++;
+          if (tt === TokenType.RBrace) depth--;
+          exprStart++;
+        }
+        // exprStart now points to the token after the closing }
       } else if (filenameTok && filenameTok.type !== TokenType.EOF) {
-        errors.push({ message: 'expected a quoted filename after redirect operator', ...span(filenameTok) });
+        errors.push({
+          message: 'expected a quoted filename or {expression} after redirect operator',
+          ...span(filenameTok),
+        });
         return errors;
       }
     }

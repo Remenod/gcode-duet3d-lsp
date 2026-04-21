@@ -20,6 +20,29 @@ export class Lexer {
     private readonly lineNum: number;
     private readonly _errors: LexError[] = [];
 
+    // ── Meta-context state ─────────────────────────────────────────────────────
+    //
+    // inMetaContext: set to true when the first meaningful token on the line is a
+    //   meta-command keyword (var, global, set, if, while, …).  While true:
+    //     • G/M code regexes are NOT tried — letters like g and m are plain chars.
+    //     • scanSegmentChars() does NOT stop at G/M + digit.
+    //   This fixes false GCode recognition inside identifiers on meta-command lines:
+    //     var testg1 = 1      →  testg1 is ONE identifier, not "test" + GCode(G1)
+    //     var g1 = 0          →  g1     is ONE identifier, not GCode(G1)
+    //     global testm1 = 1   →  testm1 is ONE identifier, not "test" + GCode(M1)
+    //
+    // expectingVarName: set to true after the first token is var / global / param.
+    //   The VERY NEXT word token is forced to TokenType.Identifier regardless of
+    //   whether it lexically matches a keyword or named constant.  This makes
+    //   the following declarations valid (they ARE valid in RRF firmware):
+    //     var iterations = 0   →  "iterations" is the variable name, not a constant
+    //     var true = 0         →  "true"  is the variable name
+    //     var while = 0        →  "while" is the variable name
+    //   Access is still disambiguated at runtime: bare `iterations` → built-in
+    //   constant; `var.iterations` → the local variable.
+    private inMetaContext = false;
+    private expectingVarName = false;
+
     constructor(src: string, lineNum = 0) {
         this.src = src;
         this.lineNum = lineNum;
@@ -30,9 +53,25 @@ export class Lexer {
     // ── Public entry point ─────────────────────────────────────────────────────
     tokenize(): Token[] {
         const tokens: Token[] = [];
+        let firstRealToken = true;
+
         while (this.pos < this.src.length) {
             const tok = this.nextToken();
             if (tok) {
+                if (firstRealToken && tok.type !== TokenType.Comment) {
+                    firstRealToken = false;
+                    // Determine meta context from the first real token.
+                    this.inMetaContext = isMetaContextType(tok.type);
+                    // var / global / param introduce a bare variable name next.
+                    this.expectingVarName =
+                        tok.type === TokenType.Var ||
+                        tok.type === TokenType.Global ||
+                        tok.type === TokenType.Param;
+                } else if (this.expectingVarName) {
+                    // The previous token was var/global/param; the name has just
+                    // been scanned.  Reset so subsequent tokens are classified normally.
+                    this.expectingVarName = false;
+                }
                 tokens.push(tok);
                 if (tok.type === TokenType.Comment) break; // nothing after ;
             }
@@ -181,30 +220,35 @@ export class Lexer {
 
     // ── Word: G-code, meta keyword, function, constant, identifier ─────────────
     private scanWord(start: number): Token {
-        // G/M codes: [GM]\d+(\.\d+)?
-        const gcodeM = /^[GM]\d+(?:\.\d+)?(?![a-zA-Z_])/i.exec(this.src.slice(this.pos));
-        if (gcodeM) {
-            this.pos += gcodeM[0].length;
-            return this.make(TokenType.GCode, gcodeM[0].toUpperCase(), start, this.pos);
+        const rest = this.src.slice(this.pos);
+
+        // ── G/M codes ──────────────────────────────────────────────────────────
+        if (!this.inMetaContext) {
+            const gcodeM = /^[GM]\d+(?:\.\d+)?(?![a-zA-Z_][a-zA-Z_])/i.exec(rest);
+            if (gcodeM) {
+                this.pos += gcodeM[0].length;
+                return this.make(TokenType.GCode, gcodeM[0].toUpperCase(), start, this.pos);
+            }
+
+            const tcodeM = /^T(?:-?\d+(?![a-zA-Z0-9_])|(?![a-zA-Z0-9_\d]))/i.exec(rest);
+            if (tcodeM) {
+                this.pos += tcodeM[0].length;
+                return this.make(TokenType.TCode, tcodeM[0].toUpperCase(), start, this.pos);
+            }
         }
 
-        // T-code: T followed by optional digit(s)
-        const tcodeM = /^T(-?\d+)?(?![a-zA-Z_])/i.exec(this.src.slice(this.pos));
-        if (tcodeM) {
-            this.pos += tcodeM[0].length;
-            return this.make(TokenType.TCode, tcodeM[0].toUpperCase(), start, this.pos);
-        }
-
-        // General identifier (may include dots for var.x, global.x)
-        // RRF identifiers: letters, digits, underscores, and dots for namespacing
-        const idM = /^[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*/.exec(this.src.slice(this.pos));
-        if (!idM) {
+        // ── General identifier ─────────────────────────────────────────────────
+        const raw = this.scanIdentifierStr();
+        if (!raw) {
             this.pos++;
             return this.make(TokenType.Unknown, this.src[start], start, this.pos);
         }
+        this.pos += raw.length;
 
-        this.pos += idM[0].length;
-        const raw = idM[0];
+        if (this.expectingVarName) {
+            return this.make(TokenType.Identifier, raw, start, this.pos);
+        }
+
         const lower = raw.toLowerCase();
 
         // Named constants
@@ -213,7 +257,7 @@ export class Lexer {
             return this.make(tt, raw, start, this.pos);
         }
 
-        // Meta keywords (only first segment, e.g. "var" not "var.something")
+        // Meta keywords (only bare name, not qualified e.g. "var.something")
         if (raw.indexOf('.') === -1 && META_KEYWORDS[lower] !== undefined) {
             return this.make(META_KEYWORDS[lower], raw, start, this.pos);
         }
@@ -224,6 +268,59 @@ export class Lexer {
         }
 
         return this.make(TokenType.Identifier, raw, start, this.pos);
+    }
+
+    // ── Identifier string scanner ──────────────────────────────────────────────
+    //
+    // Scans from `this.pos`, returns the raw identifier string without advancing
+    // `this.pos`.  The caller is responsible for updating `this.pos`.
+    //
+    // Rules:
+    //   • Consumes [a-zA-Z_][a-zA-Z0-9_]* for each segment.
+    //   • Outside meta context: stops BEFORE a G or M (case-insensitive) that is
+    //     immediately followed by a digit — those are inline G/M commands.
+    //   • Inside meta context: G and M are plain letters; never break.
+    //   • Extends across dots to handle qualified names: var.foo, global.bar,
+    //     param.baz.  Dot extension only when dot is followed by a letter/_.
+    private scanIdentifierStr(): string {
+        const src = this.src;
+        let i = this.pos;
+
+        // Must start with a letter or underscore
+        if (i >= src.length || !/[a-zA-Z_]/.test(src[i])) return '';
+
+        i = this.scanSegmentChars(src, i);
+
+        // Extend with dot-qualified segments (var.x, global.y, etc.)
+        while (
+            i < src.length &&
+            src[i] === '.' &&
+            i + 1 < src.length &&
+            /[a-zA-Z_]/.test(src[i + 1])
+        ) {
+            i++; // consume the dot
+            i = this.scanSegmentChars(src, i);
+        }
+
+        return src.slice(this.pos, i);
+    }
+
+    // Scan one contiguous segment of word-chars [a-zA-Z0-9_].
+    //
+    // Outside meta context: stops BEFORE G/M immediately followed by a digit
+    // (= new inline G/M command), e.g. allows `M42P2S1M42P3S0` to be split.
+    //
+    // Inside meta context: G and M are treated as ordinary letters.  This means
+    // `testg1`, `g1test`, `m100val` etc. are all scanned as one complete token
+    // and never incorrectly split into an identifier + a GCode.
+    private scanSegmentChars(src: string, i: number): number {
+        while (i < src.length && /[a-zA-Z0-9_]/.test(src[i])) {
+            const c = src[i];
+            const isGM = c === 'G' || c === 'g' || c === 'M' || c === 'm';
+            if (!this.inMetaContext && isGM && i + 1 < src.length && /\d/.test(src[i + 1])) break;
+            i++;
+        }
+        return i;
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
@@ -254,5 +351,31 @@ function namedConstantType(name: string): TokenType {
         case 'result': return TokenType.Result;
         case 'input': return TokenType.Input;
         default: return TokenType.Identifier;
+    }
+}
+
+// ── Meta-context type check ────────────────────────────────────────────────────
+//
+// Returns true for token types that introduce a meta-command line.
+// When any of these is the FIRST token on a line, G/M code recognition is
+// suppressed for all subsequent tokens on that line.
+function isMetaContextType(type: TokenType): boolean {
+    switch (type) {
+        case TokenType.If:
+        case TokenType.Elif:
+        case TokenType.Else:
+        case TokenType.While:
+        case TokenType.Break:
+        case TokenType.Continue:
+        case TokenType.Abort:
+        case TokenType.Var:
+        case TokenType.Global:
+        case TokenType.Set:
+        case TokenType.Echo:
+        case TokenType.Param:
+        case TokenType.Skip:
+            return true;
+        default:
+            return false;
     }
 }

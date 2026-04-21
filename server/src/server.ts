@@ -78,7 +78,38 @@ const metaData: DocDB = loadJson('../data/gcode-meta-commands.json', 'meta-comma
 const operatorsData: DocDB = loadJson('../data/gcode-operators.json', 'operators dictionary');
 const functionsData: DocDB = loadJson('../data/gcode-functions.json', 'functions dictionary');
 
+// ── File detection ─────────────────────────────────────────────────────────────
 const RRF_EXTENSIONS = new Set(['.g', '.G', '.gcode', '.macro', '.cfg']);
+
+/**
+ * Returns true if `text` looks like RRF G-code / meta-command content.
+ *
+ * Used to classify files without a registered extension (e.g. `homedelta`,
+ * `bed.g.bak`, or completely extensionless macros dropped in sys/).
+ *
+ * Heuristic: sample the first 30 non-blank lines; if ≥ 20 % of them start
+ * with a recognisable G-code or meta-command pattern we treat the file as
+ * RRF G-code.
+ */
+function looksLikeGCode(text: string): boolean {
+  const checked = text
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(l => l.length > 0)
+    .slice(0, 30);
+
+  if (checked.length === 0) return false;
+
+  let hits = 0;
+  for (const line of checked) {
+    if (/^;/.test(line)) { hits++; continue; }                         // comment
+    if (/^[GMTgmt]\d/.test(line)) { hits++; continue; }                // G/M/T code
+    if (/^(var|global|set|if|elif|else|while|break|continue|abort|param|echo|skip)\b/i
+      .test(line)) { hits++; continue; }                               // meta command
+  }
+
+  return hits >= Math.max(2, Math.floor(checked.length * 0.2));
+}
 
 // ── Initialize ────────────────────────────────────────────────────────────────
 connection.onInitialize((_params: InitializeParams): InitializeResult => {
@@ -125,6 +156,23 @@ connection.onInitialized(async () => {
   }
 });
 
+// ── Workspace directory scanner ────────────────────────────────────────────────
+//
+// Indexes every RRF file in the workspace for the symbol table and publishes
+// initial diagnostics for all non-open files.
+//
+// File detection strategy (in order):
+//   1. Files with a known RRF extension (.g, .gcode, .macro, .cfg, …) are
+//      always indexed regardless of content.
+//   2. Files WITHOUT any extension are sniffed with looksLikeGCode().  This
+//      covers the common RRF pattern of extensionless macros in sys/ or macros/.
+//   3. All other extensions (e.g. .txt, .json, .md) are ignored.
+//
+// A cap of MAX_BACKGROUND_DIAGNOSTICS prevents the initial scan from taking
+// too long on very large repositories.
+const MAX_BACKGROUND_DIAGNOSTICS = 1000;
+let backgroundDiagnosticsPublished = 0;
+
 function scanDirectoryForGlobals(dir: string): void {
   let entries: fs.Dirent[];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
@@ -135,12 +183,38 @@ function scanDirectoryForGlobals(dir: string): void {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       scanDirectoryForGlobals(fullPath);
-    } else if (RRF_EXTENSIONS.has(path.extname(entry.name))) {
-      const fileUri = URI.file(fullPath).toString();
-      if (documents.get(fileUri)) continue;
-      try {
-        symbolTable.indexDocument(fileUri, fs.readFileSync(fullPath, 'utf8'));
-      } catch { /* skip */ }
+      continue;
+    }
+
+    const ext = path.extname(entry.name);
+    const hasRrfExt = RRF_EXTENSIONS.has(ext);
+    const noExt = ext === '';
+
+    // Skip files with non-RRF extensions
+    if (!hasRrfExt && !noExt) continue;
+
+    const fileUri = URI.file(fullPath).toString();
+
+    // Already tracked by the documents manager (file is open) — skip;
+    // the open document's diagnostics are handled via onDidOpen / onDidChangeContent.
+    if (documents.get(fileUri)) continue;
+
+    let content: string;
+    try {
+      content = fs.readFileSync(fullPath, 'utf8');
+    } catch {
+      continue;
+    }
+
+    // For extensionless files, apply content sniffing before indexing.
+    if (noExt && !looksLikeGCode(content)) continue;
+
+    symbolTable.indexDocument(fileUri, content);
+
+    // Publish diagnostics for background (non-open) files up to the cap.
+    if (backgroundDiagnosticsPublished < MAX_BACKGROUND_DIAGNOSTICS) {
+      backgroundDiagnosticsPublished++;
+      publishDiagnosticsForText(fileUri, content);
     }
   }
 }
@@ -152,9 +226,14 @@ documents.onDidClose((e: TextDocumentChangeEvent<TextDocument>) => {
   const filePath = URI.parse(e.document.uri).fsPath;
   try {
     if (fs.existsSync(filePath)) {
-      symbolTable.indexDocument(e.document.uri, fs.readFileSync(filePath, 'utf8'));
+      const text = fs.readFileSync(filePath, 'utf8');
+      symbolTable.indexDocument(e.document.uri, text);
+      // Re-publish diagnostics from the saved file so the Problems panel stays
+      // accurate even after the editor tab is closed.
+      publishDiagnosticsForText(e.document.uri, text);
     } else {
       symbolTable.removeDocument(e.document.uri);
+      connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
     }
   } catch {
     symbolTable.removeDocument(e.document.uri);
@@ -249,8 +328,19 @@ function getGCodeParamInfo(tokens: Token[]): GCodeParamResult {
 }
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
+
+/** Publish diagnostics for an open TextDocument. */
 function publishDiagnostics(doc: TextDocument): void {
-  const text = doc.getText();
+  publishDiagnosticsForText(doc.uri, doc.getText());
+}
+
+/**
+ * Compute and publish diagnostics for any URI + text pair.
+ *
+ * Factored out of publishDiagnostics so it can be called for background
+ * (non-open) files discovered during the workspace scan.
+ */
+function publishDiagnosticsForText(uri: string, text: string): void {
   const lines = text.split(/\r?\n/);
   const diagnostics: Diagnostic[] = [];
 
@@ -274,7 +364,7 @@ function publishDiagnostics(doc: TextDocument): void {
     if (lexer.errors.length > 0) continue;
 
     const ctx: DiagnosticContext = {
-      symbolTable, uri: doc.uri, line: i, indent,
+      symbolTable, uri, line: i, indent,
       isValidOmPath: omChecker,
     };
 
@@ -302,7 +392,7 @@ function publishDiagnostics(doc: TextDocument): void {
     }
   }
 
-  connection.sendDiagnostics({ uri: doc.uri, diagnostics });
+  connection.sendDiagnostics({ uri, diagnostics });
 }
 
 // ── Hover ─────────────────────────────────────────────────────────────────────
