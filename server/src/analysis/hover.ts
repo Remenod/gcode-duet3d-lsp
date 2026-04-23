@@ -28,7 +28,7 @@ export function buildHover(
 
     const formatHoverWithAnchor = (title: string, data: GCodeDoc, baseUrl: string = META_DOCS_URL): Hover => {
         const anchorLink = data.anchor ? `\n\n[Documentation](${baseUrl}${data.anchor})` : '';
-        return mkHover(`**${title}** — ${data.title}\n\n${data.description}${anchorLink}`);
+        return mkHover(`### **${title}** — ${data.title}\n\n${data.description}${anchorLink}`);
     };
 
     switch (tok.type) {
@@ -88,7 +88,7 @@ export function buildHover(
         case TokenType.Input: {
             const key = tok.value.toLowerCase();
             const data = metaData[key];
-            if (!data) return mkHover(`**${tok.value}** — meta command / constant`);
+            if (!data) return mkHover(`### **${tok.value}** — meta command / constant`);
             return formatHoverWithAnchor(tok.value, data);
         }
 
