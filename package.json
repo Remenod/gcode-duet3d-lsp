@@ -4,7 +4,7 @@
   "description": "Language support, hover documentation and more for RepRapFirmware (Duet3D) G-code files.",
   "author": "remenod",
   "license": "GPL-3.0-only",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "remenod",
   "icon": "icon.png",
   "categories": [
@@ -65,7 +65,7 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.75.0",
-    "@vscode/vsce": "^3.7.1",
+    "@vscode/vsce": "^2.25.0",
     "typescript": "^5.0.0"
   },
   "dependencies": {

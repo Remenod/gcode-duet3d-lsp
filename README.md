@@ -4,11 +4,11 @@ A lightweight Language Server Protocol (LSP) extension for VS Code that provides
 
 ## Features
 
-Currently, in version 1.1.0, this extension significantly expands its capabilities, offering a comprehensive suite of tools for RRF developers:
+Currently, this extension significantly expands its capabilities, offering a comprehensive suite of tools for RRF developers:
 
 * **Intelligent Hover Documentation**: Hover over any valid G/M/T-code, literal, function, meta command, or operator to see its full title and description, including direct links to the official Duet3D documentation.
 * **Autocompletion**: Smart suggestions for commands, parameters, object model, and syntax as you type.
-* **Syntax Highlighting & Validation**: Real-time syntax checking to help catch errors early, alongside improved highlighting for better readability. Includes smart validation (e.g., ignoring invalid tool numbers like `T50` or `T-2`).
+* **Syntax Highlighting & Validation**: Real-time syntax checking to help catch errors early, alongside improved highlighting for better readability.
 * **Go to Definition**: Quickly navigate to where variables, macros, or specific references are defined.
 * **Variable Renaming**: Safely rename variables across your G-code files.
 * **Duet3D Object Model Support**: Deep integration with the RRF object model, allowing for accurate references and autocompletion of object model properties.
