@@ -169,9 +169,9 @@ def generate_lsp_database(output_path, url):
             
             combined_desc_parts = []
             for item in items:
-                combined_desc_parts.append(f"### {item['title']}\n\n{item['description']}")
+                combined_desc_parts.append(f"### **{item['title']}**\n\n{item['description']}")
             
-            combined_description = "\n\n---\n\n".join(combined_desc_parts)
+            combined_description = "\n\n---\n\n---\n\n---\n\n---\n\n---\n\n---\n\n---\n\n---\n\n---\n\n---\n\n---\n\n---\n\n".join(combined_desc_parts)
             
             lsp_database[code] = {
                 "title": combined_title,
