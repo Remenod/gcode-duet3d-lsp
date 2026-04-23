@@ -38,7 +38,7 @@ def to_markdown(node):
     # Headings
     if node.name in ['h3', 'h4', 'h5', 'h6']:
         level = int(node.name[1])
-        prefix = '#' * (level + 1)
+        prefix = '#' * min(level + 1, 6)
         text = get_inner_markdown(node).strip()
         return f"\n{prefix} {text}\n\n"
     
