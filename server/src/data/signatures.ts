@@ -231,6 +231,5 @@ export const META_COMMAND_DOCS: Record<string, { title: string; doc: string; syn
     global: { title: 'Global variable', syntax: 'global name = {expression}', doc: 'Declares a global variable accessible from any file as `global.name`.' },
     set: { title: 'Assignment', syntax: 'set var.name = {expression}', doc: 'Assigns a new value to an existing `var.` or `global.` variable.' },
     echo: { title: 'Echo', syntax: 'echo {expr1} {expr2} ...', doc: 'Outputs one or more expressions to the console / response message.' },
-    param: { title: 'Parameter', syntax: 'param name = {default_expression}', doc: 'Declares a macro parameter with a default value. Access it as `param.name`.' },
     skip: { title: 'Skip', syntax: 'skip', doc: 'Skips the current line (no-op marker).' },
 };
