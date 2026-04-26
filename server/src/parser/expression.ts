@@ -599,6 +599,7 @@ export function validateLine(
     const exprTokens = tokens.slice(exprStart);
     if (exprTokens.length > 0 && exprTokens[0].type !== TokenType.EOF) {
       errors.push(...new ExpressionValidator(exprTokens).validateCommaList());
+      if (ctx) errors.push(...checkDeclaredVars(exprTokens, ctx));
       if (ctx?.isValidOmPath) errors.push(...checkBareIdentifiers(exprTokens, ctx));
     }
     return errors;
@@ -648,6 +649,7 @@ export function validateLine(
       exprTokens[0].type !== TokenType.Comment
     ) {
       errors.push(...new ExpressionValidator(exprTokens).validateFull());
+      if (ctx) errors.push(...checkDeclaredVars(exprTokens, ctx));
       if (ctx?.isValidOmPath) errors.push(...checkBareIdentifiers(exprTokens, ctx));
     }
     return errors;
@@ -706,6 +708,7 @@ export function validateLine(
 
     errors.push(...new ExpressionValidator(exprTokens).validateFull());
     if (ctx?.isValidOmPath) errors.push(...checkBareIdentifiers(exprTokens, ctx));
+    if (ctx) errors.push(...checkDeclaredVars(exprTokens, ctx));
     return errors;
   }
 
@@ -749,6 +752,7 @@ export function validateLine(
     }
 
     errors.push(...new ExpressionValidator(exprTokens).validateFull());
+    if (ctx) errors.push(...checkDeclaredVars(exprTokens, ctx));
     if (ctx?.isValidOmPath) errors.push(...checkBareIdentifiers(exprTokens, ctx));
     return errors;
   }
@@ -875,6 +879,7 @@ export function validateLine(
     }
 
     errors.push(...new ExpressionValidator(exprTokens).validateFull());
+    if (ctx) errors.push(...checkDeclaredVars(exprTokens, ctx));
     if (ctx?.isValidOmPath) errors.push(...checkBareIdentifiers(exprTokens, ctx));
     return errors;
   }
@@ -930,6 +935,42 @@ function checkBareIdentifiers(tokens: Token[], ctx: DiagnosticContext): ParseErr
         message: `'${v}' is not a known Object Model path — did you mean 'var.${v}'?`,
         ...span(t),
       });
+    }
+  }
+  return errors;
+}
+
+// ── Declared-variable checker ─────────────────────────────────────────────────
+//
+// Validates that every var.X token in an expression was actually declared in
+// scope (error) and that global.X was declared in some known file (warning).
+// param.X tokens are intentionally skipped — they come from the caller.
+function checkDeclaredVars(tokens: Token[], ctx: DiagnosticContext): ParseError[] {
+  const errors: ParseError[] = [];
+  for (const t of tokens) {
+    if (t.type !== TokenType.Identifier) continue;
+    const v = t.value;
+
+    if (v.startsWith('var.')) {
+      const name = v.slice(4).split('[')[0];
+      if (!ctx.symbolTable.lookupVarAtLine(name, ctx.uri, ctx.line, ctx.indent)) {
+        errors.push({
+          severity: 'error',
+          message: `undefined variable '${v}' — declare it with 'var ${name} = ...' first`,
+          ...span(t),
+        });
+      }
+    } else if (v.startsWith('global.')) {
+      const name = v.slice(7).split('[')[0];
+      if (!ctx.symbolTable.lookupGlobal(name)) {
+        errors.push({
+          severity: 'warning',
+          message:
+            `'${v}' not found in any open file — ` +
+            `it may be declared in another macro or created at runtime`,
+          ...span(t),
+        });
+      }
     }
   }
   return errors;
