@@ -158,31 +158,30 @@ connection.onInitialized(async () => {
 
 // ── Workspace directory scanner ────────────────────────────────────────────────
 //
-// Indexes every RRF file in the workspace for the symbol table and publishes
-// initial diagnostics for all non-open files.
+// TWO-PASS APPROACH (fixes stale diagnostics on global references):
+//   Pass 1 — index every RRF file so the symbol table knows all globals.
+//   Pass 2 — publish diagnostics once all declarations are known.
 //
-// File detection strategy (in order):
-//   1. Files with a known RRF extension (.g, .gcode, .macro, .cfg, …) are
-//      always indexed regardless of content.
-//   2. Files WITHOUT any extension are sniffed with looksLikeGCode().  This
-//      covers the common RRF pattern of extensionless macros in sys/ or macros/.
-//   3. All other extensions (e.g. .txt, .json, .md) are ignored.
-//
+// The old single-pass approach published diagnostics for file A before
+// indexing file B which declares global.x, leaving a false warning on A.
+
 // A cap of MAX_BACKGROUND_DIAGNOSTICS prevents the initial scan from taking
 // too long on very large repositories.
 const MAX_BACKGROUND_DIAGNOSTICS = 1000;
 let backgroundDiagnosticsPublished = 0;
 
-function scanDirectoryForGlobals(dir: string): void {
+/** Collect all RRF files under `dir` that are not already open. */
+function collectRrfFiles(dir: string): Array<{ uri: string; content: string }> {
+  const results: Array<{ uri: string; content: string }> = [];
   let entries: fs.Dirent[];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-  catch { return; }
+  catch { return results; }
 
   for (const entry of entries) {
     if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      scanDirectoryForGlobals(fullPath);
+      results.push(...collectRrfFiles(fullPath));
       continue;
     }
 
@@ -209,13 +208,24 @@ function scanDirectoryForGlobals(dir: string): void {
     // For extensionless files, apply content sniffing before indexing.
     if (noExt && !looksLikeGCode(content)) continue;
 
-    symbolTable.indexDocument(fileUri, content);
+    results.push({ uri: fileUri, content });
+  }
+  return results;
+}
 
-    // Publish diagnostics for background (non-open) files up to the cap.
-    if (backgroundDiagnosticsPublished < MAX_BACKGROUND_DIAGNOSTICS) {
-      backgroundDiagnosticsPublished++;
-      publishDiagnosticsForText(fileUri, content);
-    }
+function scanDirectoryForGlobals(dir: string): void {
+  const files = collectRrfFiles(dir);
+
+  // Pass 1: index every file so all globals/vars are in the symbol table.
+  for (const { uri, content } of files) {
+    symbolTable.indexDocument(uri, content);
+  }
+
+  // Pass 2: now that all declarations are known, publish accurate diagnostics.
+  for (const { uri, content } of files) {
+    if (backgroundDiagnosticsPublished >= MAX_BACKGROUND_DIAGNOSTICS) break;
+    backgroundDiagnosticsPublished++;
+    publishDiagnosticsForText(uri, content);
   }
 }
 
