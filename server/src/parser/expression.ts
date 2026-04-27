@@ -17,10 +17,19 @@ export interface DiagnosticContext {
     getAllDeclsForName(name: string, uri: string): Array<{ indent: number; line: number }>;
     getAllGlobalDecls(name: string): Array<{ uri: string; line: number }>;
     getGlobalDeclsInFile(name: string, uri: string): Array<{ line: number }>;
+    isDuplicateVarDecl(
+      name: string,
+      uri: string,
+      newLine: number,
+      newIndent: number,
+      docLines: string[],
+    ): { line: number; indent: number } | undefined;
   };
   uri: string;
   line: number;
   indent: number;
+  /** Full document split into lines — required for accurate scope analysis. */
+  docLines?: string[];
   isValidOmPath?: (path: string) => boolean;
 }
 
@@ -624,6 +633,7 @@ export function validateLine(
       return errors;
     }
     errors.push(...new ExpressionValidator(exprTokens).validateFull());
+    if (ctx) errors.push(...checkDeclaredVars(exprTokens, ctx));
     if (ctx?.isValidOmPath) errors.push(...checkBareIdentifiers(exprTokens, ctx));
     return errors;
   }
@@ -666,16 +676,32 @@ export function validateLine(
       return errors;
     }
 
-    // Duplicate detection within the same lexical scope
+    // Scope-aware duplicate detection
     if (ctx) {
-      const decls = ctx.symbolTable.getAllDeclsForName(nameTok.value, ctx.uri);
-      for (const d of decls) {
-        if (d.indent === ctx.indent && d.line < ctx.line) {
+      if (ctx.docLines) {
+        const conflict = ctx.symbolTable.isDuplicateVarDecl(
+          nameTok.value, ctx.uri, ctx.line, ctx.indent, ctx.docLines,
+        );
+        if (conflict) {
           errors.push({
-            message: `variable '${nameTok.value}' already declared in this scope (line ${d.line + 1})`,
+            message:
+              `variable '${nameTok.value}' is already declared in an enclosing or same scope ` +
+              `(line ${conflict.line + 1}, indent ${conflict.indent}) — ` +
+              `use 'set var.${nameTok.value} = ...' to reassign it`,
             ...span(nameTok),
           });
-          break;
+        }
+      } else {
+        // Fallback (no docLines): flag exact-same-indent duplicates only
+        const decls = ctx.symbolTable.getAllDeclsForName(nameTok.value, ctx.uri);
+        for (const d of decls) {
+          if (d.indent === ctx.indent && d.line < ctx.line) {
+            errors.push({
+              message: `variable '${nameTok.value}' already declared in this scope (line ${d.line + 1})`,
+              ...span(nameTok),
+            });
+            break;
+          }
         }
       }
     }
@@ -945,13 +971,44 @@ function checkBareIdentifiers(tokens: Token[], ctx: DiagnosticContext): ParseErr
 // Validates that every var.X token in an expression was actually declared in
 // scope (error) and that global.X was declared in some known file (warning).
 // param.X tokens are intentionally skipped — they come from the caller.
+//
+// Special exemption: identifiers that are the DIRECT argument to `exists()`
+// are skipped entirely because exists() is specifically designed to test whether
+// a variable or OM path exists at runtime — flagging them as undeclared would
+// produce false positives.
+//
+//   exists(var.foo)      ← do NOT report error even if var.foo is undeclared
+//   echo {var.foo}       ← DO report error if var.foo is undeclared
+
+/**
+ * Returns true when tokens[idx] is the identifier argument to `exists(...)`.
+ *
+ * The expected token pattern (walking backwards from idx) is:
+ *   FunctionName("exists")  LParen  [Hash?]  <tokens[idx]>
+ */
+function isInsideExistsArg(tokens: Token[], idx: number): boolean {
+  let i = idx - 1;
+  // Optional leading '#' (exists(#var.arr) checks array length)
+  while (i >= 0 && tokens[i].type === TokenType.Hash) i--;
+  if (i < 0 || tokens[i].type !== TokenType.LParen) return false;
+  i--;
+  return (
+    i >= 0 &&
+    tokens[i].type === TokenType.FunctionName &&
+    tokens[i].value.toLowerCase() === 'exists'
+  );
+}
+
 function checkDeclaredVars(tokens: Token[], ctx: DiagnosticContext): ParseError[] {
   const errors: ParseError[] = [];
-  for (const t of tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
     if (t.type !== TokenType.Identifier) continue;
     const v = t.value;
 
     if (v.startsWith('var.')) {
+      // Exempt: direct argument to exists()
+      if (isInsideExistsArg(tokens, i)) continue;
       const name = v.slice(4).split('[')[0];
       if (!ctx.symbolTable.lookupVarAtLine(name, ctx.uri, ctx.line, ctx.indent)) {
         errors.push({
@@ -961,6 +1018,8 @@ function checkDeclaredVars(tokens: Token[], ctx: DiagnosticContext): ParseError[
         });
       }
     } else if (v.startsWith('global.')) {
+      // Exempt: direct argument to exists()
+      if (isInsideExistsArg(tokens, i)) continue;
       const name = v.slice(7).split('[')[0];
       if (!ctx.symbolTable.lookupGlobal(name)) {
         errors.push({
