@@ -221,6 +221,65 @@ export class SymbolTable {
     getAllDeclsForName(name: string, uri: string): VariableDecl[] {
         return this.locals.get(uri)?.get(name) ?? [];
     }
+
+    // ── Scope-aware duplicate detection ──────────────────────────────────────
+    //
+    // Returns the conflicting prior VariableDecl if declaring `name` at
+    // (newLine, newIndent) in `uri` would shadow a still-in-scope declaration.
+    //
+    // Scope rules (Python-like, as implemented by RRF firmware):
+    //   • A `var x` at (L', I') is "in scope" at (L, I) iff:
+    //       – L' < L
+    //       – I' ≤ I   (outer or same block depth)
+    //       – No non-blank, non-comment line between L' and L has indent < I'
+    //         (which would close the block containing the prior declaration)
+    //
+    // Sibling blocks at the SAME indent level are therefore NOT conflicts because
+    // a line at indent 0 (the next `if`/`while` header) closes the prior block.
+    //
+    //   var a = 1           ← indent 0, in scope for entire file → all re-decls conflict
+    //   if true
+    //       var b = 2       ← indent 4, scope ends when next indent-0 line appears
+    //   if true
+    //       var b = 3       ← valid: indent-0 line between the two closes prior scope
+    //   if true
+    //       var c = 10      ← indent 4
+    //       if true
+    //           var c = 12  ← conflict: no closing line between c@4 and c@8
+    isDuplicateVarDecl(
+        name: string,
+        uri: string,
+        newLine: number,
+        newIndent: number,
+        docLines: string[],
+    ): VariableDecl | undefined {
+        const decls = this.locals.get(uri)?.get(name) ?? [];
+        for (const d of decls) {
+            if (d.line >= newLine) continue;
+            // Only a declaration at an equal or shallower indent can shadow
+            if (d.indent > newIndent) continue;
+            if (this._isPriorDeclInScope(d.line, d.indent, newLine, docLines)) {
+                return d;
+            }
+        }
+        return undefined;
+    }
+
+    private _isPriorDeclInScope(
+        declLine: number,
+        declIndent: number,
+        currentLine: number,
+        docLines: string[],
+    ): boolean {
+        for (let k = declLine + 1; k < currentLine; k++) {
+            const raw = docLines[k] ?? '';
+            const trimmed = raw.trimStart();
+            // Blank lines and comment-only lines don't affect block structure
+            if (trimmed === '' || trimmed.startsWith(';')) continue;
+            if (lineIndent(raw) < declIndent) return false; // scope closed
+        }
+        return true;
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

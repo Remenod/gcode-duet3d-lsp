@@ -386,6 +386,7 @@ function publishDiagnosticsForText(uri: string, text: string): void {
     const ctx: DiagnosticContext = {
       symbolTable, uri, line: i, indent,
       isValidOmPath: omChecker,
+      docLines: lines,
     };
 
     for (const err of validateLine(tokens, lineText, ctx)) {
@@ -622,11 +623,12 @@ connection.onCompletion((params: CompletionParams): CompletionItem[] => {
   for (const code of Object.keys(gcodeData)) {
     items.push({ label: code, kind: CompletionItemKind.Function, detail: gcodeData[code].title });
   }
-  for (const [name, info] of Object.entries(META_COMMAND_DOCS)) {
-    const i = info as { title: string; syntax: string; doc: string };
+  for (const [name, info] of Object.entries(metaData)) {
+    if (name === '_meta') continue;
+    const i = info as GCodeDoc;
     items.push({
       label: name, kind: CompletionItemKind.Keyword, detail: i.title,
-      documentation: { kind: MarkupKind.Markdown, value: `**Syntax:** \`${i.syntax}\`\n\n${i.doc}` },
+      documentation: { kind: MarkupKind.Markdown, value: i.description },
       insertText: metaInsertText(name),
       insertTextFormat: 2,
     });
@@ -645,12 +647,17 @@ connection.onCompletion((params: CompletionParams): CompletionItem[] => {
       });
     }
   }
-  for (const [name, sig] of Object.entries(FUNCTION_SIGNATURES)) {
-    const s = sig as { params: { name: string }[]; returnType: string; doc: string };
+  for (const [name, rawInfo] of Object.entries(functionsData)) {
+    if (name === '_meta') continue;
+    const info = rawInfo as FunctionDoc;
+    const ps = info.params ?? [];
+    const detail = ps.length > 0
+      ? `${name}(${ps.map((p: FunctionParam) => p.name).join(', ')}) → ${info.returnType ?? 'any'}`
+      : info.title;
     items.push({
       label: name, kind: CompletionItemKind.Function,
-      detail: `${name}(${s.params.map(p => p.name).join(', ')}) → ${s.returnType}`,
-      documentation: { kind: MarkupKind.Markdown, value: s.doc },
+      detail,
+      documentation: { kind: MarkupKind.Markdown, value: info.description },
       insertText: `${name}($0)`,
       insertTextFormat: 2, // snippet
     });
@@ -709,11 +716,10 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null =
   const nameMatch = /([a-zA-Z_][a-zA-Z0-9_]*)$/.exec(upToCursor.slice(0, funcStart).trimEnd());
   if (!nameMatch) return null;
   const funcName = nameMatch[1].toLowerCase();
-  const sig = FUNCTION_SIGNATURES[funcName] as {
-    name: string; params: { name: string; type?: string; doc: string }[];
-    returnType: string; doc: string;
-  } | undefined;
-  if (!sig) return null;
+
+  if (funcName === '_meta') return null;
+  const funcInfo = functionsData[funcName] as FunctionDoc | undefined;
+  if (!funcInfo) return null;
 
   const inside = upToCursor.slice(funcStart + 1);
   let activeParam = 0, d = 0;
@@ -722,15 +728,22 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null =
     if (c === ')' || c === ']' || c === '}') { d--; continue; }
     if (c === ',' && d === 0) activeParam++;
   }
-  activeParam = Math.min(activeParam, sig.params.length - 1);
+
+  const funcParams = funcInfo.params ?? [];
+  activeParam = Math.min(activeParam, Math.max(0, funcParams.length - 1));
+
+  const sigLabel = funcInfo.syntax
+    ?? `${funcName}(${funcParams.map((p: FunctionParam) => p.name).join(', ')})`;
 
   return {
     signatures: [{
-      label: `${sig.name}(${sig.params.map(p => p.name).join(', ')})`,
-      documentation: { kind: MarkupKind.Markdown, value: sig.doc },
-      parameters: sig.params.map(p => ({
+      label: sigLabel,
+      documentation: { kind: MarkupKind.Markdown, value: funcInfo.description },
+      parameters: funcParams.map((p: FunctionParam) => ({
         label: p.name,
-        documentation: { kind: MarkupKind.Markdown, value: `*${p.type ?? 'any'}* — ${p.doc}` },
+        documentation: p.doc
+          ? { kind: MarkupKind.Markdown, value: `*${p.type ?? 'any'}* — ${p.doc}` }
+          : undefined,
       })) as ParameterInformation[],
     } as SignatureInformation],
     activeSignature: 0,
