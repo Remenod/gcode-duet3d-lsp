@@ -49,7 +49,6 @@ import { validateLine, DiagnosticContext } from './parser/expression';
 import { SymbolTable } from './analysis/symbolTable';
 import { buildHover } from './analysis/hover';
 import { isValidOmPath, isOmIndexAvailable, allOmPaths } from './analysis/objectModelIndex';
-import { FUNCTION_SIGNATURES, META_COMMAND_DOCS } from './data/signatures';
 import { buildRenameEdit } from './analysis/rename';
 import { buildReferences } from './analysis/references';
 import { lineIndent, findTokenAtChar } from './analysis/utils';
@@ -62,6 +61,17 @@ const symbolTable = new SymbolTable();
 // ── Load JSON data files ──────────────────────────────────────────────────────
 interface GCodeDoc { title: string; description: string; anchor: string }
 type DocDB = Record<string, GCodeDoc>;
+
+// Extended interface for gcode-functions.json entries which may carry
+// structured parameter info (used for completion detail and signature help).
+interface FunctionParam { name: string; type?: string; doc?: string }
+interface FunctionDoc extends GCodeDoc {
+  syntax?: string;          // e.g. "abs(value) → numeric"
+  returnType?: string;      // e.g. "numeric"
+  params?: FunctionParam[];
+  minArgs?: number;
+  maxArgs?: number;
+}
 
 function loadJson<T>(relPath: string, label: string): T {
   const absPath = path.join(__dirname, relPath);
