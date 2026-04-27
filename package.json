@@ -42,7 +42,8 @@
           ".g",
           ".gc",
           ".gco"
-        ]
+        ],
+        "configuration": "./language-configuration.json"
       }
     ],
     "configuration": {
