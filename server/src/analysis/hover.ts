@@ -37,7 +37,7 @@ export function buildHover(
             const data = gcodeData[tok.value.toUpperCase()];
             if (!data) return mkHover(`**${tok.value}**\n\n*No documentation found.*`);
             const anchor = data.anchor
-                ? `\n\n[Documentation](https://docs.duet3d.com/en/User_manual/Reference/Gcodes#${data.anchor})`
+                ? `\n\n[Documentation](https://docs.duet3d.com/en/User_manual/Reference/Gcodes${data.anchor})`
                 : '';
             return mkHover(`### **${tok.value}** — ${data.title}\n\n${anchor}\n\n${data.description}`);
         }
@@ -46,7 +46,7 @@ export function buildHover(
             const data = gcodeData["T"];
             if (!data) return mkHover(`**${tok.value}**\n\n*No documentation found.*`);
             const anchor = data.anchor
-                ? `\n\n[Documentation](https://docs.duet3d.com/en/User_manual/Reference/Gcodes#${data.anchor})`
+                ? `\n\n[Documentation](https://docs.duet3d.com/en/User_manual/Reference/Gcodes${data.anchor})`
                 : '';
             return mkHover(`### **T** — ${data.title}\n\n${anchor}\n\n${data.description}`);
         }
