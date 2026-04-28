@@ -921,6 +921,7 @@ export function validateLine(
   // ── G/M/T code line ───────────────────────────────────────────────────────
   if (first.type === TokenType.GCode || first.type === TokenType.TCode) {
     checkAdjacentNumberString(tokens, errors);
+    if (ctx) errors.push(...checkDeclaredVars(tokens, ctx));
     return errors;
   }
 
