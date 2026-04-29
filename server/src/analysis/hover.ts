@@ -96,6 +96,35 @@ export function buildHover(
         case TokenType.Identifier: {
             const val = tok.value;
 
+            // ── Declaration context: `var foo = …`  or  `global foo = …` ────────
+            //
+            // When the cursor is on the bare name that immediately follows a var /
+            // global keyword, the token value is the plain identifier (e.g. "foo"),
+            // NOT the qualified form ("var.foo").  Without this guard the code falls
+            // through to reconstructOmPath → buildOmHover which always produces the
+            // false-positive "Unknown Object Model path" warning.
+            {
+                const prevTok = tokIdx > 0 ? tokens[tokIdx - 1] : null;
+                if (prevTok?.type === TokenType.Var) {
+                    const decl = symbolTable.lookupVarAtLine(val, uri, lineNum, lineIndent);
+                    if (decl) {
+                        return mkHover(
+                            `**var.${val}**\n\nScope: \`var\` · Type: \`${decl.inferredType ?? 'unknown'}\` · Declared at line ${decl.line + 1} (indent ${decl.indent})`
+                        );
+                    }
+                    return mkHover(`**var.${val}**\n\nScope: \`var\` · Declaration`);
+                }
+                if (prevTok?.type === TokenType.Global) {
+                    const decl = symbolTable.lookupGlobal(val);
+                    if (decl) {
+                        return mkHover(
+                            `**global.${val}**\n\nScope: \`global\` · Type: \`${decl.inferredType ?? 'unknown'}\` · Declared in \`${shortUri(decl.uri)}\` at line ${decl.line + 1}`
+                        );
+                    }
+                    return mkHover(`**global.${val}**\n\nScope: \`global\` · Declaration`);
+                }
+            }
+
             if (val.startsWith('var.')) {
                 const name = val.slice(4);
                 const decl = symbolTable.lookupVarAtLine(name, uri, lineNum, lineIndent);

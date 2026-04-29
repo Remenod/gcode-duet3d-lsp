@@ -922,6 +922,10 @@ export function validateLine(
   if (first.type === TokenType.GCode || first.type === TokenType.TCode) {
     checkAdjacentNumberString(tokens, errors);
     if (ctx) errors.push(...checkDeclaredVars(tokens, ctx));
+    // Only check bare identifiers that are INSIDE {…} expression blocks.
+    // Bare G-code parameter letters (P, R, S, K, F …) outside braces are not
+    // expressions and must NOT be validated as Object Model paths.
+    if (ctx?.isValidOmPath) errors.push(...checkBareIdentifiers(extractGCodeExprTokens(tokens), ctx));
     return errors;
   }
 
@@ -941,6 +945,32 @@ export function validateLine(
   }
 
   return errors;
+}
+
+// ── G-code expression token extractor ────────────────────────────────────────
+//
+// Returns only the tokens that sit INSIDE {…} expression blocks in a G-code
+// line, skipping the brace delimiters themselves.
+//
+// Example:  M291 R"msg" P{var.x ^ var.y} S4
+//   Full tokens: GCode("M291") Identifier("R") StringLit Identifier("P")
+//                LBrace Identifier("var.x") Caret Identifier("var.y") RBrace
+//                Identifier("S4") EOF
+//   Result:      Identifier("var.x") Caret Identifier("var.y")
+//
+// Only these expression tokens should be passed to checkBareIdentifiers so
+// that bare G-code parameter words like P, R, S, K, F are never mistakenly
+// reported as unknown Object Model paths.
+function extractGCodeExprTokens(tokens: Token[]): Token[] {
+  const result: Token[] = [];
+  let depth = 0;
+  for (const t of tokens) {
+    if (t.type === TokenType.EOF || t.type === TokenType.Comment) break;
+    if (t.type === TokenType.LBrace) { depth++; continue; }
+    if (t.type === TokenType.RBrace) { depth--; continue; }
+    if (depth > 0) result.push(t);
+  }
+  return result;
 }
 
 // ── Bare identifier OM check ─────────────────────────────────────────────────
