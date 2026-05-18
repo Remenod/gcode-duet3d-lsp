@@ -14,6 +14,8 @@ Currently, this extension significantly expands its capabilities, offering a com
 * **Duet3D Object Model Support**: Deep integration with the RRF object model, allowing for accurate references and autocompletion of object model properties.
 * **Operators Syntax Check**: LSP is able to correctly recognize incorrect operator usage patterns.
 * **Scope check** Show diagnostics based on valid variable definitoion scope
+* **Syntax highlight** Full customizable highlight support via vscode theme settings
+* **Path completion** Path inside string is able to autocomplete to a existing file in current rrf workspace
 
 ## Extension Settings
 
