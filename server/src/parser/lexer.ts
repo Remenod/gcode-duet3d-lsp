@@ -249,6 +249,7 @@ export class Lexer {
         }
         const tok = this.make(TokenType.StringLit, this.src.slice(start, this.pos), start, this.pos);
         if (escapes.length > 0) tok.escapes = escapes;
+        if (!closed) tok.unclosed = true;
         return tok;
     }
 

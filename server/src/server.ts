@@ -51,6 +51,7 @@ import { buildHover } from './analysis/hover';
 import { isValidOmPath, isOmIndexAvailable, allOmPaths } from './analysis/objectModelIndex';
 import { buildRenameEdit } from './analysis/rename';
 import { buildReferences } from './analysis/references';
+import { findPathStringContext, buildPathCompletions } from './analysis/pathCompletion';
 import { lineIndent, findTokenAtChar } from './analysis/utils';
 
 // ── Connection setup ──────────────────────────────────────────────────────────
@@ -132,7 +133,9 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
       referencesProvider: true,
       completionProvider: {
         resolveProvider: false,
-        triggerCharacters: ['.', ' ', '(', '{'],
+        // '/' and '"' trigger path completion inside string literals;
+        // '.', ' ', '(', '{' trigger normal language completions.
+        triggerCharacters: ['.', ' ', '(', '{', '"', '/'],
       },
       signatureHelpProvider: {
         triggerCharacters: ['(', ','],
@@ -494,6 +497,23 @@ connection.onCompletion((params: CompletionParams): CompletionItem[] => {
   const lines = doc.getText().split(/\r?\n/);
   const line = lines[params.position.line] ?? '';
   const prefix = line.slice(0, params.position.character);
+
+  // ── Path completion inside a G-code parameter string ────────────────────
+  //
+  // When the cursor sits inside the string literal that follows a G-code
+  // word — typically `M98 P"…"`, `M28 "…"`, etc. — offer SD-card filesystem
+  // entries instead of normal language completions.  Triggers on any prefix
+  // (`"`, `"0`, `"0:/sys/`, `"config.`); the LSP client filters by basename.
+  {
+    const tokens = new Lexer(line, params.position.line).tokenize();
+    const ctx = findPathStringContext(tokens, params.position.character);
+    if (ctx) {
+      const items = buildPathCompletions(ctx.typedPrefix, params.textDocument.uri);
+      // Return [] (empty list, completion *handled*) rather than fall through —
+      // we don't want G-code/keyword completions polluting a path context.
+      return items ?? [];
+    }
+  }
 
   // Scoped variable completions — insert only the NAME after the dot
   if (/\bvar\.$/.test(prefix)) {
