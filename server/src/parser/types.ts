@@ -90,6 +90,13 @@ export interface Token {
      * it in a contrasting hue).
      */
     escapes?: Array<{ start: number; end: number }>;
+
+    /**
+     * For StringLit tokens: true if the literal has no closing `"` (lexer
+     * reached end-of-line first).  Path-completion uses this to treat the
+     * cursor at end-of-token as "still inside the string".
+     */
+    unclosed?: boolean;
 }
 
 // ── Known function names ──────────────────────────────────────────────────────
