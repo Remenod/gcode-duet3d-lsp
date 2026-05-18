@@ -43,6 +43,20 @@ export class Lexer {
     private inMetaContext = false;
     private expectingVarName = false;
 
+    // ── G-code parameter mode ─────────────────────────────────────────────────
+    //
+    // True once the first real token on the line is a GCode/TCode token.
+    // While true AND braceDepth === 0, each isolated letter is lexed as a
+    // standalone GCodeWord parameter token (P, S, R, X, …) and the value that
+    // follows is a normal token (Integer, StringLit, LBrace, …).
+    //
+    //   M291 S4 K{"a","b"} R"text" P{var.x} F1
+    //   └─cmd─┘└p┘└n┘└p┘└─expr─┘└p┘└─str─┘└p┘└─expr─┘└p┘└n┘
+    //
+    // Inside { … } (braceDepth > 0) we are in a real expression and identifiers
+    // are scanned by the normal rules.
+    private inGCodeParamMode = false;
+
     // ── Brace-expression context ──────────────────────────────────────────────
     //
     // braceDepth > 0 when the scanner is currently inside one or more `{ … }`
@@ -86,6 +100,10 @@ export class Lexer {
                     firstRealToken = false;
                     // Determine meta context from the first real token.
                     this.inMetaContext = isMetaContextType(tok.type);
+                    // G/M/T command lines: every isolated letter that follows
+                    // is a G-code parameter word (P, S, R, …) until EOL.
+                    this.inGCodeParamMode =
+                        tok.type === TokenType.GCode || tok.type === TokenType.TCode;
                     // var / global / param introduce a bare variable name next.
                     this.expectingVarName =
                         tok.type === TokenType.Var ||
@@ -138,6 +156,19 @@ export class Lexer {
             return this.scanNumber(start);
         }
 
+        // ── G-code parameter word ─────────────────────────────────────────────
+        // In G-code parameter mode (outside any { … } block) every isolated
+        // letter is a standalone parameter word.  This guarantees consistent
+        // syntax highlighting: the letter is always `parameter`, the value
+        // after it is always its own token (Integer, StringLit, LBrace, …).
+        //
+        // Inside { … } we fall through to the normal identifier scanner so
+        // that expressions like `{var.x + 1}` work as before.
+        if (this.inGCodeParamMode && this.braceDepth === 0 && this.isAlpha(c)) {
+            this.pos++;
+            return this.make(TokenType.GCodeWord, c.toUpperCase(), start, this.pos);
+        }
+
         // Identifier / keyword / G-code / function / constant
         if (this.isAlpha(c) || c === '_') return this.scanWord(start);
 
@@ -186,14 +217,22 @@ export class Lexer {
     }
 
     // ── String literal ─────────────────────────────────────────────────────────
+    //
+    // RRF uses doubled quotes for escaping: `"he said ""hi"""` represents the
+    // text  he said "hi".  We record each `""` span so the semantic-tokens
+    // pass can highlight escapes distinctly from the surrounding content.
     private scanString(start: number): Token {
         this.pos++; // skip opening "
         let closed = false;
+        const escapes: Array<{ start: number; end: number }> = [];
         while (this.pos < this.src.length) {
+            const charPos = this.pos;
             const c = this.src[this.pos++];
             if (c === '"') {
                 if (this.src[this.pos] === '"') {
-                    this.pos++; // escaped "" → single "
+                    // Escaped "" — record its span (2 chars) and consume the second quote.
+                    escapes.push({ start: charPos, end: charPos + 2 });
+                    this.pos++;
                 } else {
                     closed = true;
                     break; // end of string
@@ -208,7 +247,9 @@ export class Lexer {
                 line: this.lineNum,
             });
         }
-        return this.make(TokenType.StringLit, this.src.slice(start, this.pos), start, this.pos);
+        const tok = this.make(TokenType.StringLit, this.src.slice(start, this.pos), start, this.pos);
+        if (escapes.length > 0) tok.escapes = escapes;
+        return tok;
     }
 
     // ── Character literal  'X' ─────────────────────────────────────────────────

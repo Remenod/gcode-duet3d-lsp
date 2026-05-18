@@ -16,6 +16,9 @@ export enum TokenType {
     // ── G/M/T codes ──────────────────────────────────────────────────────────
     GCode,              // G28  M220  G29.1
     TCode,              // T0  T-1  T
+    GCodeWord,          // Single-letter G-code parameter word (P, S, R, X, …)
+    //                     emitted ONLY in G-code lines, OUTSIDE any { … } block.
+    //                     The numeric/string value that follows is a separate token.
 
     // ── Meta commands (StringParser.cpp, CheckIfMetaCommand) ─────────────────
     If, Elif, Else,
@@ -77,6 +80,16 @@ export interface Token {
     line: number;   // 0-based
     start: number;   // character offset from line start
     end: number;   // exclusive
+    /**
+     * For StringLit tokens: character spans of escaped quotes (`""`) inside the
+     * string literal, in source coordinates.  Each span covers exactly 2 chars.
+     * Empty / undefined when the string contains no escapes.
+     *
+     * Used by the semantic-tokens pass to colour `""` distinctly from the
+     * surrounding string content (LSP `regexp` type — themes typically render
+     * it in a contrasting hue).
+     */
+    escapes?: Array<{ start: number; end: number }>;
 }
 
 // ── Known function names ──────────────────────────────────────────────────────
@@ -110,16 +123,31 @@ export const META_KEYWORDS: Record<string, TokenType> = {
 };
 
 // ── Semantic token type names (for LSP legend) ────────────────────────────────
+//
+// All names are LSP standard token types so any colour theme picks them up
+// without custom configuration.  The index order MUST match the `ST` constant
+// in server.ts.
 export const SEMANTIC_TOKEN_TYPES = [
-    'keyword',      // 0  meta commands
-    'function',     // 1  built-in functions
-    'variable',     // 2  var. global. param.
+    'keyword',      // 0  meta commands: if, var, while, …
+    'function',     // 1  built-in functions: abs, sin, max, …
+    'variable',     // 2  var.x  global.x  param.x
     'number',       // 3  numeric literals
     'string',       // 4  string / char literals
-    'operator',     // 5  operators
-    'parameter',    // 6  named constants
-    'macro',        // 7  G/M/T codes
+    'operator',     // 5  + - * / ^ == != < > = , : ? # >> >>>
+    'parameter',    // 6  G-code parameter letters: P, S, R, X, …
+    'macro',        // 7  G/M/T command codes: G1, M291, T0
     'comment',      // 8  ; comments
+    'enumMember',   // 9  named constants: true, false, null, pi, iterations, …
+    'regexp',       // 10 escape sequences inside string literals ("" → single ")
 ];
 
-export const SEMANTIC_TOKEN_MODIFIERS: string[] = [];
+// ── Semantic token modifiers ──────────────────────────────────────────────────
+//
+// Standard LSP modifiers.  Themes that support these will style the affected
+// tokens distinctively (e.g. strike-through for `deprecated`, bold-italic for
+// `declaration`).
+export const SEMANTIC_TOKEN_MODIFIERS = [
+    'declaration',  // 0  the defining occurrence of a symbol (var x = …)
+    'readonly',     // 1  named constants, param.X (set at call site)
+    'deprecated',   // 2  >>> redirect operator
+];
