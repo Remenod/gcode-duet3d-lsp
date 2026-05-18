@@ -80,6 +80,16 @@ export interface Token {
     line: number;   // 0-based
     start: number;   // character offset from line start
     end: number;   // exclusive
+    /**
+     * For StringLit tokens: character spans of escaped quotes (`""`) inside the
+     * string literal, in source coordinates.  Each span covers exactly 2 chars.
+     * Empty / undefined when the string contains no escapes.
+     *
+     * Used by the semantic-tokens pass to colour `""` distinctly from the
+     * surrounding string content (LSP `regexp` type — themes typically render
+     * it in a contrasting hue).
+     */
+    escapes?: Array<{ start: number; end: number }>;
 }
 
 // ── Known function names ──────────────────────────────────────────────────────
@@ -128,6 +138,7 @@ export const SEMANTIC_TOKEN_TYPES = [
     'macro',        // 7  G/M/T command codes: G1, M291, T0
     'comment',      // 8  ; comments
     'enumMember',   // 9  named constants: true, false, null, pi, iterations, …
+    'regexp',       // 10 escape sequences inside string literals ("" → single ")
 ];
 
 // ── Semantic token modifiers ──────────────────────────────────────────────────

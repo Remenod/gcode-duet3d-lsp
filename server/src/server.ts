@@ -707,6 +707,7 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null =
 //   │  comment    │  ; comments                                               │
 //   │  enumMember │  named constants (true, false, null, pi, iterations,      │
 //   │             │                   line, result, input)                    │
+//   │  regexp     │  escape sequences inside string literals (`""` → single `"`) │
 //   └─────────────┴───────────────────────────────────────────────────────────┘
 //
 //   ┌──────────────┬──────────────────────────────────────────────────────────┐
@@ -731,6 +732,7 @@ const ST = {
   macro: 7,
   comment: 8,
   enumMember: 9,
+  regexp: 10,
 };
 
 const MOD = {
@@ -751,6 +753,14 @@ connection.languages.semanticTokens.on((params: SemanticTokensParams): SemanticT
 
     for (let j = 0; j < tokens.length; j++) {
       const tok = tokens[j];
+
+      // String literals with embedded `""` escapes are emitted as several
+      // ranges so the escapes can be coloured distinctly from the content.
+      if (tok.type === TokenType.StringLit && tok.escapes && tok.escapes.length > 0) {
+        emitStringWithEscapes(builder, i, tok);
+        continue;
+      }
+
       const styled = styleFor(tok, tokens, j);
       if (styled !== null) {
         builder.push(i, tok.start, tok.end - tok.start, styled.type, styled.mod);
@@ -760,6 +770,37 @@ connection.languages.semanticTokens.on((params: SemanticTokensParams): SemanticT
 
   return builder.build();
 });
+
+/**
+ * Emit a StringLit as a sequence of `string` ranges interspersed with
+ * `regexp` ranges for each `""` escape.  Themes typically render `regexp` in
+ * a contrasting hue, making escapes pop out from the surrounding text.
+ *
+ * Example for the literal  "test ""test"""  spanning columns 0..15:
+ *
+ *   "test "      → string  (0..6)
+ *   ""           → regexp  (6..8)
+ *   test         → string  (8..12)
+ *   ""           → regexp  (12..14)
+ *   "            → string  (14..15)
+ */
+function emitStringWithEscapes(builder: SemanticTokensBuilder, line: number, tok: Token): void {
+  const escapes = tok.escapes!;          // non-empty by caller guarantee
+  let cursor = tok.start;
+
+  for (const esc of escapes) {
+    if (esc.start > cursor) {
+      builder.push(line, cursor, esc.start - cursor, ST.string, 0);
+    }
+    builder.push(line, esc.start, esc.end - esc.start, ST.regexp, 0);
+    cursor = esc.end;
+  }
+
+  // Trailing content after the last escape (includes the closing quote).
+  if (cursor < tok.end) {
+    builder.push(line, cursor, tok.end - cursor, ST.string, 0);
+  }
+}
 
 /**
  * Returns the semantic token type + modifier bitmask for `tok`, or null if

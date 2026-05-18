@@ -217,14 +217,22 @@ export class Lexer {
     }
 
     // ── String literal ─────────────────────────────────────────────────────────
+    //
+    // RRF uses doubled quotes for escaping: `"he said ""hi"""` represents the
+    // text  he said "hi".  We record each `""` span so the semantic-tokens
+    // pass can highlight escapes distinctly from the surrounding content.
     private scanString(start: number): Token {
         this.pos++; // skip opening "
         let closed = false;
+        const escapes: Array<{ start: number; end: number }> = [];
         while (this.pos < this.src.length) {
+            const charPos = this.pos;
             const c = this.src[this.pos++];
             if (c === '"') {
                 if (this.src[this.pos] === '"') {
-                    this.pos++; // escaped "" → single "
+                    // Escaped "" — record its span (2 chars) and consume the second quote.
+                    escapes.push({ start: charPos, end: charPos + 2 });
+                    this.pos++;
                 } else {
                     closed = true;
                     break; // end of string
@@ -239,7 +247,9 @@ export class Lexer {
                 line: this.lineNum,
             });
         }
-        return this.make(TokenType.StringLit, this.src.slice(start, this.pos), start, this.pos);
+        const tok = this.make(TokenType.StringLit, this.src.slice(start, this.pos), start, this.pos);
+        if (escapes.length > 0) tok.escapes = escapes;
+        return tok;
     }
 
     // ── Character literal  'X' ─────────────────────────────────────────────────
