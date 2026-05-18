@@ -43,6 +43,20 @@ export class Lexer {
     private inMetaContext = false;
     private expectingVarName = false;
 
+    // ── G-code parameter mode ─────────────────────────────────────────────────
+    //
+    // True once the first real token on the line is a GCode/TCode token.
+    // While true AND braceDepth === 0, each isolated letter is lexed as a
+    // standalone GCodeWord parameter token (P, S, R, X, …) and the value that
+    // follows is a normal token (Integer, StringLit, LBrace, …).
+    //
+    //   M291 S4 K{"a","b"} R"text" P{var.x} F1
+    //   └─cmd─┘└p┘└n┘└p┘└─expr─┘└p┘└─str─┘└p┘└─expr─┘└p┘└n┘
+    //
+    // Inside { … } (braceDepth > 0) we are in a real expression and identifiers
+    // are scanned by the normal rules.
+    private inGCodeParamMode = false;
+
     // ── Brace-expression context ──────────────────────────────────────────────
     //
     // braceDepth > 0 when the scanner is currently inside one or more `{ … }`
@@ -86,6 +100,10 @@ export class Lexer {
                     firstRealToken = false;
                     // Determine meta context from the first real token.
                     this.inMetaContext = isMetaContextType(tok.type);
+                    // G/M/T command lines: every isolated letter that follows
+                    // is a G-code parameter word (P, S, R, …) until EOL.
+                    this.inGCodeParamMode =
+                        tok.type === TokenType.GCode || tok.type === TokenType.TCode;
                     // var / global / param introduce a bare variable name next.
                     this.expectingVarName =
                         tok.type === TokenType.Var ||
@@ -136,6 +154,19 @@ export class Lexer {
         // Number: hex 0x..., bin 0b..., decimal/float
         if (this.isDigit(c) || (c === '0' && this.peek(1) === 'x') || (c === '0' && this.peek(1) === 'b')) {
             return this.scanNumber(start);
+        }
+
+        // ── G-code parameter word ─────────────────────────────────────────────
+        // In G-code parameter mode (outside any { … } block) every isolated
+        // letter is a standalone parameter word.  This guarantees consistent
+        // syntax highlighting: the letter is always `parameter`, the value
+        // after it is always its own token (Integer, StringLit, LBrace, …).
+        //
+        // Inside { … } we fall through to the normal identifier scanner so
+        // that expressions like `{var.x + 1}` work as before.
+        if (this.inGCodeParamMode && this.braceDepth === 0 && this.isAlpha(c)) {
+            this.pos++;
+            return this.make(TokenType.GCodeWord, c.toUpperCase(), start, this.pos);
         }
 
         // Identifier / keyword / G-code / function / constant

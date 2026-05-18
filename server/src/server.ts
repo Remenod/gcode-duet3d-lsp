@@ -292,61 +292,6 @@ function getAllDocTexts(): Map<string, string> {
   return map;
 }
 
-// ── G-code parameter suppression ─────────────────────────────────────────────
-//
-// In RRF G-code, everything after the first command token is a parameter.
-// However, {expression} blocks embedded in G-code lines are real expressions
-// (e.g. `M42 P3 S{var.i}`). Tokens inside { } should NOT be suppressed for
-// hover purposes.
-//
-// Returns a set of token indices that should be suppressed for hover/semantic.
-// "Suppressed" means they are G-code parameter noise (letters, numbers, etc.)
-// NOT expression tokens inside { } blocks.
-
-interface GCodeParamResult {
-  /** All token indices that are in parameter position */
-  paramIndices: Set<number>;
-  /** Token indices that are INSIDE a { } expression block */
-  exprBraceIndices: Set<number>;
-}
-
-function getGCodeParamInfo(tokens: Token[]): GCodeParamResult {
-  const paramIndices = new Set<number>();
-  const exprBraceIndices = new Set<number>();
-
-  const firstType = tokens[0]?.type;
-  if (firstType !== TokenType.GCode && firstType !== TokenType.TCode) {
-    return { paramIndices, exprBraceIndices };
-  }
-
-  let braceDepth = 0;
-
-  for (let i = 1; i < tokens.length; i++) {
-    const tok = tokens[i];
-    if (tok.type === TokenType.EOF || tok.type === TokenType.Comment) break;
-
-    if (tok.type === TokenType.LBrace) {
-      braceDepth++;
-      paramIndices.add(i);    // the { itself is still a param token
-      exprBraceIndices.add(i);
-    } else if (tok.type === TokenType.RBrace) {
-      braceDepth--;
-      paramIndices.add(i);
-      exprBraceIndices.add(i);
-    } else if (braceDepth > 0) {
-      // Inside { } — mark as expression token (NOT suppressed for hover)
-      exprBraceIndices.add(i);
-      // Still add to paramIndices for semantic token purposes, but hover
-      // will check exprBraceIndices before suppressing
-      paramIndices.add(i);
-    } else {
-      paramIndices.add(i);
-    }
-  }
-
-  return { paramIndices, exprBraceIndices };
-}
-
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 
 /** Publish diagnostics for an open TextDocument. */
@@ -417,6 +362,11 @@ function publishDiagnosticsForText(uri: string, text: string): void {
 }
 
 // ── Hover ─────────────────────────────────────────────────────────────────────
+//
+// Token types that have no useful hover (G-code parameter words, structural
+// punctuation, comments, EOF) simply fall through to `default` in buildHover
+// and return null.  No special suppression logic is needed — the lexer's
+// GCodeWord type makes the cases self-evident.
 connection.onHover((params: HoverParams): Hover | null => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return null;
@@ -424,20 +374,6 @@ connection.onHover((params: HoverParams): Hover | null => {
   const lines = doc.getText().split(/\r?\n/);
   const line = lines[params.position.line] ?? '';
   const tokens = new Lexer(line, params.position.line).tokenize();
-
-  const { paramIndices, exprBraceIndices } = getGCodeParamInfo(tokens);
-
-  for (let i = 0; i < tokens.length; i++) {
-    const tok = tokens[i];
-    if (tok.start <= params.position.character && params.position.character < tok.end) {
-      if (paramIndices.has(i)) {
-        // Inside a { } expression block — always show hover (these are real expressions)
-        if (exprBraceIndices.has(i)) break;
-        // Pure parameter noise — suppress
-        return null;
-      }
-    }
-  }
 
   return buildHover(
     tokens,
@@ -752,7 +688,38 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null =
 });
 
 // ── Semantic Tokens ────────────────────────────────────────────────────────────
-// Token type indices (must match SEMANTIC_TOKEN_TYPES order)
+//
+// Highlighting design (all values are LSP standard token types / modifiers,
+// so any colour theme picks them up without per-language theme work):
+//
+//   ┌─────────────┬───────────────────────────────────────────────────────────┐
+//   │  Token type │  Used for                                                 │
+//   ├─────────────┼───────────────────────────────────────────────────────────┤
+//   │  keyword    │  if, elif, else, while, break, continue, abort,           │
+//   │             │  var, global, set, echo, param, skip                      │
+//   │  function   │  built-in functions (abs, sin, max, vector, exists, …)    │
+//   │  variable   │  var.x  global.x  param.x                                 │
+//   │  number     │  numeric literals (Integer, Float, Hex, Bin)              │
+//   │  string     │  string and char literals                                 │
+//   │  operator   │  + - * / ^ == != < > = , : ? # >> >>>                     │
+//   │  parameter  │  G-code parameter letters (P, S, R, X, Y, Z, F, K, …)     │
+//   │  macro      │  G/M/T command codes (G1, M291, T0)                       │
+//   │  comment    │  ; comments                                               │
+//   │  enumMember │  named constants (true, false, null, pi, iterations,      │
+//   │             │                   line, result, input)                    │
+//   └─────────────┴───────────────────────────────────────────────────────────┘
+//
+//   ┌──────────────┬──────────────────────────────────────────────────────────┐
+//   │  Modifier    │  Applied to                                              │
+//   ├──────────────┼──────────────────────────────────────────────────────────┤
+//   │  declaration │  the defining name in `var x = …` or `global x = …`     │
+//   │  readonly    │  named constants (pi, true, …) and `param.X` references  │
+//   │  deprecated  │  `>>>` redirect operator                                 │
+//   └──────────────┴──────────────────────────────────────────────────────────┘
+//
+// The token-type and modifier indices below MUST match the order in
+// SEMANTIC_TOKEN_TYPES / SEMANTIC_TOKEN_MODIFIERS in parser/types.ts.
+
 const ST = {
   keyword: 0,
   function: 1,
@@ -763,6 +730,13 @@ const ST = {
   parameter: 6,
   macro: 7,
   comment: 8,
+  enumMember: 9,
+};
+
+const MOD = {
+  declaration: 1 << 0,
+  readonly: 1 << 1,
+  deprecated: 1 << 2,
 };
 
 connection.languages.semanticTokens.on((params: SemanticTokensParams): SemanticTokens => {
@@ -774,31 +748,38 @@ connection.languages.semanticTokens.on((params: SemanticTokensParams): SemanticT
 
   for (let i = 0; i < lines.length; i++) {
     const tokens = new Lexer(lines[i], i).tokenize();
-    const { paramIndices, exprBraceIndices } = getGCodeParamInfo(tokens);
 
     for (let j = 0; j < tokens.length; j++) {
       const tok = tokens[j];
-
-      if (paramIndices.has(j) && !exprBraceIndices.has(j)) {
-        // Pure param noise — only highlight single-letter identifiers and codes
-        if (tok.type === TokenType.Identifier && tok.value.length === 1)
-          builder.push(i, tok.start, tok.end - tok.start, ST.parameter, 0);
-        if (tok.type === TokenType.TCode || tok.type === TokenType.GCode)
-          builder.push(i, tok.start, tok.end - tok.start, ST.parameter, 0);
-        continue;
+      const styled = styleFor(tok, tokens, j);
+      if (styled !== null) {
+        builder.push(i, tok.start, tok.end - tok.start, styled.type, styled.mod);
       }
-
-      const st = semanticTypeFor(tok);
-      if (st !== null) builder.push(i, tok.start, tok.end - tok.start, st, 0);
     }
   }
 
   return builder.build();
 });
 
-function semanticTypeFor(tok: Token): number | null {
+/**
+ * Returns the semantic token type + modifier bitmask for `tok`, or null if
+ * the token should not be highlighted at all (whitespace, structural braces,
+ * EOF, …).
+ *
+ * Context-sensitive cases:
+ *   • Identifier "var.x" / "global.x" / "param.x" → variable
+ *       — `param.X` gets the `readonly` modifier
+ *   • Bare identifier (an Object Model path like `move.axes`) → variable
+ *   • Identifier directly after a `var`/`global` keyword → variable+declaration
+ *   • `>>>` → operator+deprecated
+ */
+function styleFor(
+  tok: Token,
+  tokens: Token[],
+  idx: number,
+): { type: number; mod: number } | null {
   switch (tok.type) {
-    // Meta keywords
+    // ── Meta keywords ─────────────────────────────────────────────────────
     case TokenType.If:
     case TokenType.Elif:
     case TokenType.Else:
@@ -812,21 +793,38 @@ function semanticTypeFor(tok: Token): number | null {
     case TokenType.Echo:
     case TokenType.Param:
     case TokenType.Skip:
-      return ST.keyword;
+      return { type: ST.keyword, mod: 0 };
 
-    // Functions
+    // ── Built-in functions ────────────────────────────────────────────────
     case TokenType.FunctionName:
-      return ST.function;
+      return { type: ST.function, mod: 0 };
 
-    // Variables
+    // ── Identifiers: variables, declarations, OM paths ────────────────────
     case TokenType.Identifier: {
       const v = tok.value;
-      if (v.startsWith('var.') || v.startsWith('global.') || v.startsWith('param.'))
-        return ST.variable;
-      return null;
+
+      // Qualified variable references
+      if (v.startsWith('var.') || v.startsWith('global.')) {
+        return { type: ST.variable, mod: 0 };
+      }
+      if (v.startsWith('param.')) {
+        // param.X is set by the macro caller; it is read-only inside the macro.
+        return { type: ST.variable, mod: MOD.readonly };
+      }
+
+      // Declaration form:  `var <name>`  /  `global <name>`
+      // The bare name token is preceded by Var/Global; mark with `declaration`.
+      const prev = idx > 0 ? tokens[idx - 1] : null;
+      if (prev?.type === TokenType.Var || prev?.type === TokenType.Global) {
+        return { type: ST.variable, mod: MOD.declaration };
+      }
+
+      // Object Model path or other bare identifier — still a "variable" kind
+      // of name from the highlighter's point of view.
+      return { type: ST.variable, mod: 0 };
     }
 
-    // Named constants / parameters
+    // ── Named constants  → enumMember + readonly ──────────────────────────
     case TokenType.True:
     case TokenType.False:
     case TokenType.Null:
@@ -835,21 +833,21 @@ function semanticTypeFor(tok: Token): number | null {
     case TokenType.Line:
     case TokenType.Result:
     case TokenType.Input:
-      return ST.parameter;
+      return { type: ST.enumMember, mod: MOD.readonly };
 
-    // Numbers
+    // ── Numeric literals ──────────────────────────────────────────────────
     case TokenType.Integer:
     case TokenType.HexInteger:
     case TokenType.BinInteger:
     case TokenType.Float:
-      return ST.number;
+      return { type: ST.number, mod: 0 };
 
-    // Strings
+    // ── String / char literals ────────────────────────────────────────────
     case TokenType.StringLit:
     case TokenType.CharLit:
-      return ST.string;
+      return { type: ST.string, mod: 0 };
 
-    // Operators
+    // ── Operators ─────────────────────────────────────────────────────────
     case TokenType.Plus:
     case TokenType.Minus:
     case TokenType.Star:
@@ -867,17 +865,30 @@ function semanticTypeFor(tok: Token): number | null {
     case TokenType.Not:
     case TokenType.Ternary:
     case TokenType.Hash:
-      return ST.operator;
+    case TokenType.Colon:
+    case TokenType.Comma:
+    case TokenType.DoubleGt:
+      return { type: ST.operator, mod: 0 };
 
-    // G/M/T codes
+    case TokenType.TripleGt:
+      // Deprecated `>>>` redirect operator — themes that style `deprecated`
+      // (e.g. with strike-through) will pick this up automatically.
+      return { type: ST.operator, mod: MOD.deprecated };
+
+    // ── G-code parameter words (P, S, R, X, …) ────────────────────────────
+    case TokenType.GCodeWord:
+      return { type: ST.parameter, mod: 0 };
+
+    // ── G/M/T command codes ───────────────────────────────────────────────
     case TokenType.GCode:
     case TokenType.TCode:
-      return ST.macro;
+      return { type: ST.macro, mod: 0 };
 
-    // Comments
+    // ── Comments ──────────────────────────────────────────────────────────
     case TokenType.Comment:
-      return ST.comment;
+      return { type: ST.comment, mod: 0 };
 
+    // ── Structural tokens (braces, parens, brackets, dot, EOF, unknown) ───
     default:
       return null;
   }
