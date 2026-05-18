@@ -43,6 +43,30 @@ export class Lexer {
     private inMetaContext = false;
     private expectingVarName = false;
 
+    // ── Brace-expression context ──────────────────────────────────────────────
+    //
+    // braceDepth > 0 when the scanner is currently inside one or more `{ … }`
+    // expression blocks embedded in a G-code line.  Example:
+    //
+    //   M291 P{var.msg1 ^ var.msg2} S4
+    //          └──── braceDepth = 1 ────┘
+    //
+    // Inside such a block the content is a real RRF expression (same syntax as
+    // `echo`, `if`, `set …`, etc.), not G-code parameters.  Therefore G/M
+    // followed by a digit must NOT be treated as an inline G/M command — that
+    // would shred ordinary identifiers such as `var.msg1`, `var.warnMsg1`,
+    // `cmd2g3` etc. into pieces (`var.ms` + `G1`, `var.warnMs` + `G1`,
+    // `cmd2` + `G3`).
+    //
+    // Effectively, the brace context promotes the scanner to the same
+    // "G/M letters are plain letters" mode as `inMetaContext`.
+    private braceDepth = 0;
+
+    /** True when G/M + digit must NOT be recognised as inline G/M codes. */
+    private get inExprContext(): boolean {
+        return this.inMetaContext || this.braceDepth > 0;
+    }
+
     constructor(src: string, lineNum = 0) {
         this.src = src;
         this.lineNum = lineNum;
@@ -72,6 +96,14 @@ export class Lexer {
                     // been scanned.  Reset so subsequent tokens are classified normally.
                     this.expectingVarName = false;
                 }
+
+                // Track brace-expression depth.  `{` and `}` are single-char tokens
+                // whose recognition does not depend on context, so updating after the
+                // fact is safe — subsequent tokens scanned from `nextToken()` will see
+                // the new depth via `inExprContext`.
+                if (tok.type === TokenType.LBrace) this.braceDepth++;
+                else if (tok.type === TokenType.RBrace && this.braceDepth > 0) this.braceDepth--;
+
                 tokens.push(tok);
                 if (tok.type === TokenType.Comment) break; // nothing after ;
             }
@@ -223,7 +255,7 @@ export class Lexer {
         const rest = this.src.slice(this.pos);
 
         // ── G/M codes ──────────────────────────────────────────────────────────
-        if (!this.inMetaContext) {
+        if (!this.inExprContext) {
             const gcodeM = /^[GM]\d+(?:\.\d+)?(?![a-zA-Z_][a-zA-Z_])/i.exec(rest);
             if (gcodeM) {
                 this.pos += gcodeM[0].length;
@@ -277,9 +309,10 @@ export class Lexer {
     //
     // Rules:
     //   • Consumes [a-zA-Z_][a-zA-Z0-9_]* for each segment.
-    //   • Outside meta context: stops BEFORE a G or M (case-insensitive) that is
-    //     immediately followed by a digit — those are inline G/M commands.
-    //   • Inside meta context: G and M are plain letters; never break.
+    //   • Outside expression context: stops BEFORE a G or M (case-insensitive)
+    //     that is immediately followed by a digit — those are inline G/M commands.
+    //   • Inside expression context (meta-command line OR inside `{ … }`):
+    //     G and M are plain letters; never break.
     //   • Extends across dots to handle qualified names: var.foo, global.bar,
     //     param.baz.  Dot extension only when dot is followed by a letter/_.
     private scanIdentifierStr(): string {
@@ -307,17 +340,20 @@ export class Lexer {
 
     // Scan one contiguous segment of word-chars [a-zA-Z0-9_].
     //
-    // Outside meta context: stops BEFORE G/M immediately followed by a digit
-    // (= new inline G/M command), e.g. allows `M42P2S1M42P3S0` to be split.
+    // Outside expression context: stops BEFORE G/M immediately followed by a
+    // digit (= new inline G/M command), e.g. allows `M42P2S1M42P3S0` to be
+    // split correctly.
     //
-    // Inside meta context: G and M are treated as ordinary letters.  This means
-    // `testg1`, `g1test`, `m100val` etc. are all scanned as one complete token
-    // and never incorrectly split into an identifier + a GCode.
+    // Inside expression context (meta-command line OR inside `{ … }`):
+    //   G and M are treated as ordinary letters.  This means
+    //   `testg1`, `g1test`, `m100val`, `var.msg1`, `var.warnMsg1` etc. are all
+    //   scanned as one complete token and never incorrectly split into an
+    //   identifier + a GCode.
     private scanSegmentChars(src: string, i: number): number {
         while (i < src.length && /[a-zA-Z0-9_]/.test(src[i])) {
             const c = src[i];
             const isGM = c === 'G' || c === 'g' || c === 'M' || c === 'm';
-            if (!this.inMetaContext && isGM && i + 1 < src.length && /\d/.test(src[i + 1])) break;
+            if (!this.inExprContext && isGM && i + 1 < src.length && /\d/.test(src[i + 1])) break;
             i++;
         }
         return i;
