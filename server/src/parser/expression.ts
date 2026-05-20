@@ -921,6 +921,7 @@ export function validateLine(
   // ── G/M/T code line ───────────────────────────────────────────────────────
   if (first.type === TokenType.GCode || first.type === TokenType.TCode) {
     checkAdjacentNumberString(tokens, errors);
+    errors.push(...checkDuplicateGCodeParams(tokens));
     if (ctx) errors.push(...checkDeclaredVars(tokens, ctx));
     // Only check bare identifiers that are INSIDE {…} expression blocks.
     // Bare G-code parameter letters (P, R, S, K, F …) outside braces are not
@@ -1037,6 +1038,49 @@ function isInsideExistsArg(tokens: Token[], idx: number): boolean {
     tokens[i].value.toLowerCase() === 'exists'
   );
 }
+
+// ── Duplicate G-code parameter detection ─────────────────────────────────────
+//
+// A single G/M/T command line must not use the same parameter letter twice.
+// E.g.  `G1 X10 X20`   ← second X is an error
+//       `M98 P"a.g" P"b.g"`   ← second P is an error
+//
+// Inline G/M chains like `M42P2S1M42P3S0` contain two separate commands; each
+// command resets its own parameter set.  We detect a new inline command by
+// the appearance of a second GCode/TCode token in the stream.
+function checkDuplicateGCodeParams(tokens: Token[]): ParseError[] {
+  const errors: ParseError[] = [];
+  let seen = new Map<string, Token>();   // letter → first occurrence
+
+  for (let i = 1; i < tokens.length; i++) {  // skip the leading G/M/T token
+    const t = tokens[i];
+    if (t.type === TokenType.EOF || t.type === TokenType.Comment) break;
+
+    // A nested inline command (e.g. the 2nd M42 in `M42P2S1M42P3S0`) starts
+    // a fresh parameter scope.
+    if (t.type === TokenType.GCode || t.type === TokenType.TCode) {
+      seen = new Map();
+      continue;
+    }
+
+    if (t.type !== TokenType.GCodeWord) continue;
+
+    const letter = t.value.toUpperCase();
+    const prior = seen.get(letter);
+    if (prior) {
+      errors.push({
+        severity: 'warning',
+        message: `duplicate parameter '${letter}' — already used at column ${prior.start + 1}`,
+        ...span(t),
+      });
+    } else {
+      seen.set(letter, t);
+    }
+  }
+
+  return errors;
+}
+
 
 function checkDeclaredVars(tokens: Token[], ctx: DiagnosticContext): ParseError[] {
   const errors: ParseError[] = [];
