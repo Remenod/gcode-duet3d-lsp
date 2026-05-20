@@ -348,17 +348,6 @@ function publishDiagnosticsForText(uri: string, text: string): void {
         source: 'rrf-gcode',
       });
     }
-
-    for (const tok of tokens) {
-      if (tok.type === TokenType.TripleGt) {
-        diagnostics.push({
-          severity: DiagnosticSeverity.Warning,
-          range: mkRange(i, tok.start, i, tok.end),
-          message: '>>> is a deprecated redirect operator. Use echo with > redirection instead.',
-          source: 'rrf-gcode',
-        });
-      }
-    }
   }
 
   connection.sendDiagnostics({ uri, diagnostics });
