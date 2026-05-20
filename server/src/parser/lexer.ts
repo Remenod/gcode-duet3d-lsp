@@ -164,9 +164,27 @@ export class Lexer {
         //
         // Inside { … } we fall through to the normal identifier scanner so
         // that expressions like `{var.x + 1}` work as before.
+        //
+        // EXCEPTIONS (delegate to scanWord instead):
+        //   a) Qualified identifiers — `var.x`, `global.y`, `param.z`.  These
+        //      can appear unbraced in malformed-but-recoverable expressions
+        //      like   `M291 P"foo " ^ var.bar ^ "baz"`   and we want hover /
+        //      rename / go-to-definition to keep working on them.
+        //   b) Inline G/M command codes — `M42P2S1M42P3S0` is a chain of two
+        //      separate commands; the second `M42` must lex as a fresh GCode
+        //      token, not as `GCodeWord("M")` + `Integer(42)`.
         if (this.inGCodeParamMode && this.braceDepth === 0 && this.isAlpha(c)) {
-            this.pos++;
-            return this.make(TokenType.GCodeWord, c.toUpperCase(), start, this.pos);
+            const isInlineGM = (c === 'G' || c === 'g' || c === 'M' || c === 'm')
+                && this.pos + 1 < this.src.length
+                && /\d/.test(this.src[this.pos + 1]);
+            const isInlineT = (c === 'T' || c === 't')
+                && this.pos + 1 < this.src.length
+                && /[-\d]/.test(this.src[this.pos + 1]);
+
+            if (!isInlineGM && !isInlineT && !this.isQualifiedIdentStart(this.pos)) {
+                this.pos++;
+                return this.make(TokenType.GCodeWord, c.toUpperCase(), start, this.pos);
+            }
         }
 
         // Identifier / keyword / G-code / function / constant
@@ -357,6 +375,24 @@ export class Lexer {
     //     G and M are plain letters; never break.
     //   • Extends across dots to handle qualified names: var.foo, global.bar,
     //     param.baz.  Dot extension only when dot is followed by a letter/_.
+    /**
+     * Look-ahead from `i`: returns true if the source starts a qualified
+     * identifier such as `var.x`, `global.y`, `param.z`, `move.axes.x`.
+     * The criterion is: a non-empty run of [a-zA-Z_][a-zA-Z0-9_]* followed
+     * directly by a `.` and then another identifier character.
+     *
+     * Used by `nextToken` to suppress GCodeWord lexing when the current
+     * letter is the start of a qualified identifier (which can appear
+     * unbraced in malformed expressions — see comment at the call site).
+     */
+    private isQualifiedIdentStart(i: number): boolean {
+        const src = this.src;
+        if (i >= src.length || !/[a-zA-Z_]/.test(src[i])) return false;
+        let j = i + 1;
+        while (j < src.length && /[a-zA-Z0-9_]/.test(src[j])) j++;
+        return j < src.length - 1 && src[j] === '.' && /[a-zA-Z_]/.test(src[j + 1]);
+    }
+
     private scanIdentifierStr(): string {
         const src = this.src;
         let i = this.pos;
