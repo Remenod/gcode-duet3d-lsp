@@ -418,6 +418,14 @@ function publishDiagnosticsForText(uri: string, text: string): void {
         source: 'rrf-gcode',
       });
     }
+
+    diagnostics.push(...validateGCodeArgs(
+      tokens,
+      lineText,
+      uri,
+      sdRoot,
+      argCheckConfig,
+    ));
   }
 
   connection.sendDiagnostics({ uri, diagnostics });
@@ -530,7 +538,7 @@ connection.onDefinition((params: DefinitionParams): Location | null => {
   // Path inside a G-code parameter string (e.g. M98 P"sys/foo.g") — open the
   // file it points to.  This runs first so it has priority over var/global
   // resolution (the cursor cannot be on both).
-  const pathLoc = pathLocationAtCursor(tokens, params.position.character, params.textDocument.uri);
+  const pathLoc = pathLocationAtCursor(tokens, params.position.character, params.textDocument.uri, lineText);
   if (pathLoc) return pathLoc;
 
   const tok = tokens.find(t => t.start <= params.position.character && params.position.character < t.end);
