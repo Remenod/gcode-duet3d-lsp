@@ -32,6 +32,11 @@ import {
   ResponseError,
   WorkspaceEdit,
   TextEdit,
+  CodeAction,
+  CodeActionKind,
+  CodeActionParams,
+  ExecuteCommandParams,
+  DidChangeConfigurationNotification,
 } from 'vscode-languageserver/node';
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -52,6 +57,14 @@ import { isValidOmPath, isOmIndexAvailable, allOmPaths } from './analysis/object
 import { buildRenameEdit } from './analysis/rename';
 import { buildReferences } from './analysis/references';
 import { findPathStringContext, buildPathCompletions } from './analysis/pathCompletion';
+import {
+  validateGCodeArgs, getSdRootForUri, invalidateSdRootCache,
+} from './analysis/argValidators';
+import {
+  ArgCheckConfig, defaultArgCheckConfig, normaliseArgCheckConfig,
+} from './analysis/argCheckConfig';
+import { buildCodeActions, CMD_ADD_PATH_IGNORE } from './analysis/codeActions';
+import { pathLocationAtCursor } from './analysis/pathDefinition';
 import { lineIndent, findTokenAtChar } from './analysis/utils';
 
 // ── Connection setup ──────────────────────────────────────────────────────────
@@ -151,12 +164,29 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
         },
         full: true,
       },
+      codeActionProvider: {
+        codeActionKinds: [CodeActionKind.QuickFix],
+      },
+      executeCommandProvider: {
+        commands: [CMD_ADD_PATH_IGNORE],
+      },
     },
   };
 });
 
 connection.onInitialized(async () => {
   connection.console.log('RRF LSP ready.');
+
+  // Subscribe to dynamic configuration changes — the client will push
+  // workspace/didChangeConfiguration notifications when the user edits
+  // the relevant section of settings.json.
+  try {
+    await connection.client.register(DidChangeConfigurationNotification.type, undefined);
+  } catch {
+    // Clients without dynamic registration capability fall back to static
+    // defaults — that's fine, validators still run.
+  }
+
   try {
     const folders = await connection.workspace.getWorkspaceFolders();
     if (folders) {
@@ -166,6 +196,35 @@ connection.onInitialized(async () => {
     }
   } catch (e) {
     connection.console.warn(`RRF LSP: workspace scan failed: ${e}`);
+  }
+});
+
+// ── Configuration ────────────────────────────────────────────────────────────
+//
+// We cache the latest config so each diagnostic line doesn't trigger a
+// configuration round-trip.  The cache is invalidated on
+// didChangeConfiguration; we then re-publish diagnostics for every open
+// document.
+
+let argCheckConfig: ArgCheckConfig = defaultArgCheckConfig();
+let configLoaded = false;
+
+async function refreshConfig(): Promise<void> {
+  try {
+    const raw = await connection.workspace.getConfiguration('rrfgcode.argCheck');
+    argCheckConfig = normaliseArgCheckConfig(raw);
+  } catch {
+    argCheckConfig = defaultArgCheckConfig();
+  }
+  configLoaded = true;
+}
+
+connection.onDidChangeConfiguration(async () => {
+  await refreshConfig();
+  // Re-publish diagnostics for every open document so warnings appear /
+  // disappear immediately when the user toggles a setting.
+  for (const doc of documents.all()) {
+    publishDiagnostics(doc);
   }
 });
 
@@ -265,7 +324,14 @@ documents.onDidClose((e: TextDocumentChangeEvent<TextDocument>) => {
 
 function onDocumentChange(doc: TextDocument): void {
   symbolTable.indexDocument(doc.uri, doc.getText());
-  publishDiagnostics(doc);
+  // Lazy first-load of config so diagnostics on the very first opened
+  // document reflect user settings, not just defaults.  Subsequent changes
+  // are pushed by didChangeConfiguration.
+  if (!configLoaded) {
+    refreshConfig().then(() => publishDiagnostics(doc));
+  } else {
+    publishDiagnostics(doc);
+  }
 }
 
 // ── All-docs helper ───────────────────────────────────────────────────────────
@@ -314,6 +380,10 @@ function publishDiagnosticsForText(uri: string, text: string): void {
 
   const omChecker = isOmIndexAvailable() ? isValidOmPath : undefined;
 
+  // Resolve the SD root once per document.  validateGCodeArgs reuses this
+  // for every G/M/T line so we don't repeatedly walk the filesystem.
+  const sdRoot = getSdRootForUri(uri);
+
   for (let i = 0; i < lines.length; i++) {
     const lineText = lines[i];
     const indent = lineIndent(lineText);
@@ -348,6 +418,14 @@ function publishDiagnosticsForText(uri: string, text: string): void {
         source: 'rrf-gcode',
       });
     }
+
+    diagnostics.push(...validateGCodeArgs(
+      tokens,
+      lineText,
+      uri,
+      sdRoot,
+      argCheckConfig,
+    ));
   }
 
   connection.sendDiagnostics({ uri, diagnostics });
@@ -457,6 +535,12 @@ connection.onDefinition((params: DefinitionParams): Location | null => {
   const tokens = new Lexer(lineText, params.position.line).tokenize();
   const indent = lineIndent(lineText);
 
+  // Path inside a G-code parameter string (e.g. M98 P"sys/foo.g") — open the
+  // file it points to.  This runs first so it has priority over var/global
+  // resolution (the cursor cannot be on both).
+  const pathLoc = pathLocationAtCursor(tokens, params.position.character, params.textDocument.uri, lineText);
+  if (pathLoc) return pathLoc;
+
   const tok = tokens.find(t => t.start <= params.position.character && params.position.character < t.end);
   if (!tok || tok.type !== TokenType.Identifier) return null;
 
@@ -478,6 +562,105 @@ connection.onDefinition((params: DefinitionParams): Location | null => {
   );
 });
 
+// ── Code actions (Quick Fix) ──────────────────────────────────────────────────
+connection.onCodeAction((params: CodeActionParams): CodeAction[] => {
+  return buildCodeActions(params);
+});
+
+// ── Execute Command — addPathIgnore ──────────────────────────────────────────
+//
+// Backing implementation for the quick-fix.  Strategy:
+//
+//   1. In VS Code, the language-client extension is expected to intercept
+//      this command client-side and call
+//        vscode.workspace.getConfiguration('rrfgcode.argCheck.paths')
+//              .update('ignore', [...], ConfigurationTarget.Workspace)
+//      That's the cleanest path and the resulting settings.json edit happens
+//      atomically through the VS Code settings API.
+//
+//   2. If the command reaches the server anyway (generic LSP client, or the
+//      extension hasn't been updated), we fall back to editing
+//      `<workspace>/.vscode/settings.json` directly via workspace/applyEdit.
+//      That keeps everything portable across machines because the path lives
+//      INSIDE the workspace; checking in `.vscode/settings.json` preserves
+//      the ignores when the project moves to another developer.
+//
+// In both cases we optimistically update the in-memory config so the
+// diagnostic disappears immediately, then trust the follow-up
+// `workspace/didChangeConfiguration` to reconcile.
+connection.onExecuteCommand(async (params: ExecuteCommandParams) => {
+  if (params.command !== CMD_ADD_PATH_IGNORE) return;
+  const pattern = params.arguments?.[0];
+  if (typeof pattern !== 'string' || pattern.length === 0) return;
+
+  await refreshConfig();
+  const next = Array.from(new Set([...argCheckConfig.paths.ignore, pattern]));
+
+  // Optimistic local update — diagnostic vanishes right away.
+  argCheckConfig = {
+    ...argCheckConfig,
+    paths: { ...argCheckConfig.paths, ignore: next },
+  };
+  for (const doc of documents.all()) publishDiagnostics(doc);
+
+  // Best-effort server-side persistence — only used by clients that don't
+  // override the command themselves.
+  try {
+    await persistIgnoresToWorkspaceSettings(next);
+  } catch (e) {
+    connection.console.warn(`RRF LSP: could not persist ignore pattern: ${e}`);
+  }
+});
+
+/**
+ * Write `ignore` array into `<workspace>/.vscode/settings.json`.
+ *
+ * This is the **fallback path** for clients that don't intercept the
+ * `rrfgcode.addPathIgnore` command client-side.  A VS Code extension SHOULD
+ * intercept it and call:
+ *
+ *     vscode.workspace.getConfiguration('rrfgcode.argCheck.paths')
+ *         .update('ignore', newIgnores, ConfigurationTarget.Workspace)
+ *
+ * That route goes through VS Code's settings API, which knows how to merge
+ * with JSONC-style comments, preserve formatting, etc.  When the extension
+ * does intercept, this server-side function is never invoked.
+ *
+ * Because we cannot safely merge with an existing JSONC settings.json from
+ * here (rewriting would clobber comments and surrounding keys), we only
+ * write when the file does NOT yet exist — that way no user data is at
+ * risk.  When the file does exist, we log a hint and rely on the user to
+ * either install the extension or edit settings.json manually.
+ */
+async function persistIgnoresToWorkspaceSettings(ignore: string[]): Promise<void> {
+  const folders = await connection.workspace.getWorkspaceFolders();
+  if (!folders || folders.length === 0) return;
+
+  const root = URI.parse(folders[0].uri).fsPath;
+  const dotVscode = path.join(root, '.vscode');
+  const settingsPath = path.join(dotVscode, 'settings.json');
+
+  if (fs.existsSync(settingsPath)) {
+    connection.console.info(
+      'RRF LSP: `.vscode/settings.json` already exists — not auto-editing to ' +
+      'avoid clobbering comments. Add the ignore pattern manually, or update ' +
+      'the language-client extension to intercept the rrfgcode.addPathIgnore ' +
+      'command client-side.',
+    );
+    return;
+  }
+
+  // Safe to create from scratch.
+  try {
+    if (!fs.existsSync(dotVscode)) fs.mkdirSync(dotVscode, { recursive: true });
+    const obj = { 'rrfgcode.argCheck.paths.ignore': ignore };
+    fs.writeFileSync(settingsPath, JSON.stringify(obj, null, 4) + '\n', 'utf8');
+    connection.console.info(`RRF LSP: wrote ${settingsPath}`);
+  } catch (e) {
+    connection.console.warn(`RRF LSP: failed to write settings.json: ${e}`);
+  }
+}
+
 // ── Completions ───────────────────────────────────────────────────────────────
 connection.onCompletion((params: CompletionParams): CompletionItem[] => {
   const doc = documents.get(params.textDocument.uri);
@@ -495,9 +678,9 @@ connection.onCompletion((params: CompletionParams): CompletionItem[] => {
   // (`"`, `"0`, `"0:/sys/`, `"config.`); the LSP client filters by basename.
   {
     const tokens = new Lexer(line, params.position.line).tokenize();
-    const ctx = findPathStringContext(tokens, params.position.character);
+    const ctx = findPathStringContext(tokens, params.position.character, line);
     if (ctx) {
-      const items = buildPathCompletions(ctx.typedPrefix, params.textDocument.uri);
+      const items = buildPathCompletions(ctx.typedPrefix, params.textDocument.uri, ctx.resolve);
       // Return [] (empty list, completion *handled*) rather than fall through —
       // we don't want G-code/keyword completions polluting a path context.
       return items ?? [];
