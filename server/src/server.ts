@@ -32,6 +32,11 @@ import {
   ResponseError,
   WorkspaceEdit,
   TextEdit,
+  CodeAction,
+  CodeActionKind,
+  CodeActionParams,
+  ExecuteCommandParams,
+  DidChangeConfigurationNotification,
 } from 'vscode-languageserver/node';
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -151,12 +156,29 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
         },
         full: true,
       },
+      codeActionProvider: {
+        codeActionKinds: [CodeActionKind.QuickFix],
+      },
+      executeCommandProvider: {
+        commands: [CMD_ADD_PATH_IGNORE],
+      },
     },
   };
 });
 
 connection.onInitialized(async () => {
   connection.console.log('RRF LSP ready.');
+
+  // Subscribe to dynamic configuration changes — the client will push
+  // workspace/didChangeConfiguration notifications when the user edits
+  // the relevant section of settings.json.
+  try {
+    await connection.client.register(DidChangeConfigurationNotification.type, undefined);
+  } catch {
+    // Clients without dynamic registration capability fall back to static
+    // defaults — that's fine, validators still run.
+  }
+
   try {
     const folders = await connection.workspace.getWorkspaceFolders();
     if (folders) {
@@ -265,7 +287,14 @@ documents.onDidClose((e: TextDocumentChangeEvent<TextDocument>) => {
 
 function onDocumentChange(doc: TextDocument): void {
   symbolTable.indexDocument(doc.uri, doc.getText());
-  publishDiagnostics(doc);
+  // Lazy first-load of config so diagnostics on the very first opened
+  // document reflect user settings, not just defaults.  Subsequent changes
+  // are pushed by didChangeConfiguration.
+  if (!configLoaded) {
+    refreshConfig().then(() => publishDiagnostics(doc));
+  } else {
+    publishDiagnostics(doc);
+  }
 }
 
 // ── All-docs helper ───────────────────────────────────────────────────────────
@@ -313,6 +342,10 @@ function publishDiagnosticsForText(uri: string, text: string): void {
   const diagnostics: Diagnostic[] = [];
 
   const omChecker = isOmIndexAvailable() ? isValidOmPath : undefined;
+
+  // Resolve the SD root once per document.  validateGCodeArgs reuses this
+  // for every G/M/T line so we don't repeatedly walk the filesystem.
+  const sdRoot = getSdRootForUri(uri);
 
   for (let i = 0; i < lines.length; i++) {
     const lineText = lines[i];
@@ -456,6 +489,12 @@ connection.onDefinition((params: DefinitionParams): Location | null => {
   const lineText = lines[params.position.line] ?? '';
   const tokens = new Lexer(lineText, params.position.line).tokenize();
   const indent = lineIndent(lineText);
+
+  // Path inside a G-code parameter string (e.g. M98 P"sys/foo.g") — open the
+  // file it points to.  This runs first so it has priority over var/global
+  // resolution (the cursor cannot be on both).
+  const pathLoc = pathLocationAtCursor(tokens, params.position.character, params.textDocument.uri);
+  if (pathLoc) return pathLoc;
 
   const tok = tokens.find(t => t.start <= params.position.character && params.position.character < t.end);
   if (!tok || tok.type !== TokenType.Identifier) return null;
