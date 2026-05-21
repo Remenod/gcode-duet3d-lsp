@@ -1,23 +1,17 @@
 // analysis/pathCompletion.ts
 //
-// File-path completion for string literals in RRF G-code, mirroring the
-// behaviour of `#include "..."` in C/C++ editors.
+// File-path completion for string literals in RRF G-code.
 //
-// RepRapFirmware addresses files on the SD card using either:
-//   • Volume-prefixed absolute path:  "0:/sys/config.g"   (volume 0 = main SD)
-//   • Plain absolute path:            "/sys/config.g"     (defaults to vol. 0)
-//   • Bare filename:                  "config.g"          (resolved in /sys/)
+// Important RRF behaviour mirrored here:
+//   • Volume-prefixed path:  "0:/sys/config.g"  → SD root / sys / config.g
+//   • Absolute path:         "/sys/config.g"    → SD root / sys / config.g
+//   • Relative macro path:   M98 P"foo.g"       → SD root / sys / foo.g
+//   • Relative macro path:   M98 P"led/red.g"   → SD root / sys / led / red.g
 //
-// On the user's workstation the SD-card root is mirrored as a project
-// directory containing the standard top-level folders (sys, macros, gcodes,
-// www, menu, firmware).  This module:
-//
-//   1. Detects whether the cursor is inside a string-literal token that
-//      appears as the value of a G-code word (M98 P"…", M28 "…", etc.).
-//   2. Locates the SD-card root on disk by walking up from the active file
-//      until a directory that looks like an RRF SD root is found.
-//   3. Resolves the typed prefix to a directory and lists its contents,
-//      returning them as CompletionItems.
+// The completion provider is deliberately command-aware. It only offers path
+// completions in parameters that are known RRF filesystem paths, so ordinary
+// strings such as M291 messages, WiFi SSIDs and passwords are not polluted with
+// filesystem suggestions.
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -28,133 +22,268 @@ import { Token, TokenType } from '../parser/types';
 // ── SD-root detection ─────────────────────────────────────────────────────────
 
 /**
- * Top-level directory names a real RRF SD card always contains some subset of.
- * If at least one of these exists as a child directory, we treat the parent
- * as the SD root.
+ * Top-level directory names that may be present on an RRF SD card mirror.
  *
- * Reference: docs.duet3d.com/User_manual/RepRapFirmware/SD_card
+ * Do not treat a directory as the SD root merely because it has one child named
+ * "Firmware" or "www". Macro trees often contain folders with those names.
+ * A valid SD root must contain a top-level /sys directory and either /sys/config.g
+ * or at least one other known SD-root marker.
  */
-const SD_ROOT_MARKERS = new Set(['sys', 'macros', 'gcodes', 'www', 'menu', 'firmware']);
+const SD_ROOT_MARKERS = new Set([
+    'sys',
+    'macros',
+    'gcodes',
+    'www',
+    'menu',
+    'firmware',
+    'filaments',
+    'user',
+]);
 
 /**
- * Walk upward from `startDir` until a directory containing at least one
- * SD_ROOT_MARKERS child is found.  Returns `null` if none found before the
- * filesystem root.
+ * Walk upward from `startDir` until a directory that looks like an RRF SD-card
+ * root is found. Returns `null` if none is found before the filesystem root.
  */
 export function findSdRoot(startDir: string): string | null {
     let dir = startDir;
     let prev = '';
     while (dir !== prev) {
-        if (hasAnySdMarker(dir)) return dir;
+        if (isSdRootCandidate(dir)) return dir;
         prev = dir;
         dir = path.dirname(dir);
     }
     return null;
 }
 
-function hasAnySdMarker(dir: string): boolean {
+function isSdRootCandidate(dir: string): boolean {
     let entries: fs.Dirent[];
     try {
         entries = fs.readdirSync(dir, { withFileTypes: true });
     } catch {
         return false;
     }
+
+    const dirs = new Map<string, string>();
     for (const e of entries) {
-        if (e.isDirectory() && SD_ROOT_MARKERS.has(e.name.toLowerCase())) return true;
+        if (e.isDirectory()) dirs.set(e.name.toLowerCase(), e.name);
     }
-    return false;
+
+    const sysName = dirs.get('sys');
+    if (!sysName) return false;
+
+    if (caseInsensitiveChildExists(path.join(dir, sysName), 'config.g')) return true;
+
+    let markerCount = 0;
+    for (const marker of SD_ROOT_MARKERS) {
+        if (dirs.has(marker)) markerCount++;
+    }
+    return markerCount >= 2;
 }
 
-// ── String-literal context detection ──────────────────────────────────────────
+function caseInsensitiveChildExists(parent: string, childName: string): boolean {
+    let entries: fs.Dirent[];
+    try {
+        entries = fs.readdirSync(parent, { withFileTypes: true });
+    } catch {
+        return false;
+    }
+
+    const want = childName.toLowerCase();
+    return entries.some(e => e.name.toLowerCase() === want);
+}
+
+// ── Command-aware string-literal context detection ────────────────────────────
+
+export interface PathResolveOptions {
+    /**
+     * Directory used for relative paths, without leading slash.
+     * Example: M98 P"foo.g" resolves under /sys, so this is "sys".
+     */
+    defaultRelativeDir?: string;
+
+    /**
+     * Backward-compatible alias. Used only when defaultRelativeDir is absent.
+     */
+    defaultBareDir?: string;
+}
 
 export interface StringContext {
     /** The StringLit token the cursor is inside. */
     tok: Token;
-    /** Substring between the opening `"` and the cursor (the path so far). */
+    /** Substring between the opening `"` and the cursor. */
     typedPrefix: string;
+    /** Command-specific relative path base. */
+    resolve?: PathResolveOptions;
 }
+
+interface CompletionPathRule {
+    resolve?: PathResolveOptions;
+}
+
+const ARG_PATH_RULES = new Map<string, Map<string, CompletionPathRule>>();
+const TAIL_PATH_RULES = new Map<string, CompletionPathRule>();
+
+function registerArg(cmd: string, letter: string, resolve?: PathResolveOptions): void {
+    const C = cmd.toUpperCase();
+    const L = letter.toUpperCase();
+    let m = ARG_PATH_RULES.get(C);
+    if (!m) {
+        m = new Map<string, CompletionPathRule>();
+        ARG_PATH_RULES.set(C, m);
+    }
+    m.set(L, { resolve });
+}
+
+function registerTail(cmd: string, resolve?: PathResolveOptions): void {
+    TAIL_PATH_RULES.set(cmd.toUpperCase(), { resolve });
+}
+
+// Path parameters mirrored from argValidators.ts. Keep this list narrow: only
+// parameters that are actually filesystem paths should trigger path completion.
+registerArg('G29', 'P', { defaultRelativeDir: 'sys' });
+registerArg('M20', 'P');
+registerArg('M36.1', 'P');
+registerArg('M36.2', 'P', { defaultRelativeDir: 'sys' });
+registerArg('M37', 'P');
+registerArg('M98', 'P', { defaultRelativeDir: 'sys' });
+registerArg('M374', 'P', { defaultRelativeDir: 'sys' });
+registerArg('M375', 'P', { defaultRelativeDir: 'sys' });
+registerArg('M470', 'P');
+registerArg('M471', 'S');
+registerArg('M471', 'T');
+registerArg('M472', 'P');
+registerArg('M505', 'P', { defaultRelativeDir: 'sys' });
+registerArg('M505.1', 'P', { defaultRelativeDir: 'www' });
+registerArg('M929', 'P');
+registerArg('M956', 'F', { defaultRelativeDir: 'sys/accelerometer' });
+registerArg('M997', 'P', { defaultRelativeDir: 'firmware' });
+
+registerTail('M23');
+registerTail('M28');
+registerTail('M30');
+registerTail('M32');
+registerTail('M36');
+registerTail('M38');
 
 /**
  * Returns the StringLit token whose interior contains `character`, plus the
- * already-typed prefix (everything between the opening quote and the cursor).
- * Returns null if the cursor is not inside a string literal value, or if the
- * string is not in a position where path completion makes sense.
- *
- * Position rules:
- *   • Cursor MUST be strictly inside the quotes (not on a quote character),
- *     UNLESS the string is unclosed — then cursor == end is also valid (the
- *     user is in the middle of typing the literal).
- *   • The string MUST be the value of a G-code parameter word — i.e. the
- *     previous non-whitespace token is a GCodeWord.  This prevents path
- *     completion from triggering inside `echo "hello"`, `var s = "x"`, etc.
+ * already-typed prefix. Returns null unless the string is in a known RRF path
+ * position.
  */
 export function findPathStringContext(
     tokens: Token[],
     character: number,
+    lineText = '',
 ): StringContext | null {
+    const commandName = commandNameFromTokens(tokens);
+    if (!commandName) return null;
+
     for (let i = 0; i < tokens.length; i++) {
         const tok = tokens[i];
         if (tok.type !== TokenType.StringLit) continue;
+        if (!isInsideString(tok, character)) continue;
 
-        // Inside the quotes: strictly between for closed strings; up to and
-        // including end-of-token for unclosed strings (still being typed).
-        const inside = tok.unclosed
-            ? (character > tok.start && character <= tok.end)
-            : (character > tok.start && character < tok.end);
-        if (!inside) continue;
+        const typedPrefix = typedPrefixAt(tok, character);
 
-        // Must follow a G-code parameter letter (M98 P"…", M28 "…", …)
+        // Lettered path argument: M98 P"...", M471 S"...", etc.
         const prev = i > 0 ? tokens[i - 1] : null;
-        if (prev?.type !== TokenType.GCodeWord) return null;
+        if (prev?.type === TokenType.GCodeWord) {
+            const rule = ARG_PATH_RULES.get(commandName)?.get(prev.value.toUpperCase());
+            if (!rule) return null;
+            return { tok, typedPrefix, resolve: rule.resolve };
+        }
 
-        // typedPrefix is everything from after the opening " up to the cursor.
-        // The opening " is at tok.start; the actual text content starts at start+1.
-        const beforeCursor = character - tok.start;
-        const typedPrefix = tok.value.slice(1, Math.max(1, beforeCursor));
+        // Quoted legacy tail path: M36 "...", M32 "...", etc.
+        const tailRule = TAIL_PATH_RULES.get(commandName);
+        if (tailRule && lineText) {
+            const tail = quotedTailStringRange(tokens, lineText);
+            if (tail && tail.start <= character && character <= tail.end && tail.start === tok.start) {
+                return { tok, typedPrefix, resolve: tailRule.resolve };
+            }
+        }
 
-        return { tok, typedPrefix };
+        return null;
     }
     return null;
 }
 
-// ── Path resolution ───────────────────────────────────────────────────────────
+function commandNameFromTokens(tokens: Token[]): string | null {
+    const head = tokens[0];
+    if (!head) return null;
+    if (head.type !== TokenType.GCode && head.type !== TokenType.TCode) return null;
+    return head.value.toUpperCase();
+}
 
-/**
- * Convert an RRF path string into a filesystem path under `sdRoot`.
- *
- * RRF accepts:
- *   "0:/sys/config.g"    → <sdRoot>/sys/config.g  (volume 0)
- *   "/sys/config.g"      → <sdRoot>/sys/config.g  (implicit volume 0)
- *   "sys/config.g"       → <sdRoot>/sys/config.g  (also implicit; some boards)
- *   "config.g"           → <sdRoot>/sys/config.g  (RRF resolves bare names in /sys/)
- *
- * For COMPLETION we resolve only the directory part of `rrfPath` and ignore
- * the basename — the basename is the filter the user is typing.  The caller
- * passes the typed prefix; we return:
- *   • dir  — absolute filesystem directory to list
- *   • baseFilter — what the user has typed for the basename (used to filter)
- *
- * Returns null only when sdRoot is missing.
- */
+function isInsideString(tok: Token, character: number): boolean {
+    return tok.unclosed
+        ? (character > tok.start && character <= tok.end)
+        : (character > tok.start && character < tok.end);
+}
+
+function typedPrefixAt(tok: Token, character: number): string {
+    const beforeCursor = character - tok.start;
+    return tok.value.slice(1, Math.max(1, beforeCursor));
+}
+
+function quotedTailStringRange(tokens: Token[], lineText: string): { start: number; end: number } | null {
+    const head = tokens[0];
+    if (!head || head.type !== TokenType.GCode) return null;
+
+    const comment = tokens.find(t => t.type === TokenType.Comment);
+    const endLimit = comment ? comment.start : lineText.length;
+    const rawTail = lineText.slice(head.end, endLimit);
+    const leading = rawTail.match(/^\s*/)?.[0].length ?? 0;
+    const start = head.end + leading;
+    if (start >= endLimit || lineText[start] !== '"') return null;
+
+    let i = start + 1;
+    while (i < endLimit) {
+        if (lineText[i] === '"') {
+            if (i + 1 < endLimit && lineText[i + 1] === '"') {
+                i += 2;
+                continue;
+            }
+            return { start, end: i + 1 };
+        }
+        i++;
+    }
+
+    // Unclosed quoted string: completion should still work at end of line.
+    return { start, end: endLimit };
+}
+
+// ── Path-prefix resolution ───────────────────────────────────────────────────
+
 export interface ResolvedDir {
     dir: string;
     baseFilter: string;
 }
 
-export function resolvePathPrefix(rrfPath: string, sdRoot: string): ResolvedDir | null {
+/**
+ * Convert a typed RRF path prefix into the filesystem directory to list.
+ *
+ * Unlike generic filesystem completion, relative paths may have a command-
+ * specific base directory. For M98 this is /sys, including relative paths that
+ * contain slashes.
+ */
+export function resolvePathPrefix(
+    rrfPath: string,
+    sdRoot: string,
+    options: PathResolveOptions = {},
+): ResolvedDir | null {
     if (!sdRoot) return null;
+    if (/\0|\r|\n/.test(rrfPath)) return null;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(rrfPath)) return null;
+    if (rrfPath.includes('\\')) return null;
 
-    // Strip volume prefix:  "N:/..."  →  "/..."  (any digit accepted)
     let rest = rrfPath;
     const volMatch = /^\d+:\/?/.exec(rest);
+    const hasVolume = !!volMatch;
     if (volMatch) rest = rest.slice(volMatch[0].length);
 
-    // Strip leading "/" if present
+    const isAbsolute = hasVolume || rest.startsWith('/');
     rest = rest.replace(/^\/+/, '');
 
-    // Split into directory part and the basename the user is typing.
-    // If the prefix ends with "/", the user has just opened a directory and
-    // baseFilter is empty.
     let dirPart: string;
     let baseFilter: string;
     const lastSlash = rest.lastIndexOf('/');
@@ -166,20 +295,14 @@ export function resolvePathPrefix(rrfPath: string, sdRoot: string): ResolvedDir 
         baseFilter = rest.slice(lastSlash + 1);
     }
 
-    const dir = dirPart ? path.join(sdRoot, dirPart) : sdRoot;
+    const relativeBase = options.defaultRelativeDir ?? options.defaultBareDir;
+    const baseDir = !isAbsolute && relativeBase ? path.join(sdRoot, relativeBase) : sdRoot;
+    const dir = dirPart ? path.join(baseDir, dirPart) : baseDir;
     return { dir, baseFilter };
 }
 
 // ── Listing → CompletionItems ─────────────────────────────────────────────────
 
-/**
- * List entries in `dir` and emit completion items.  Filenames are returned
- * as-is; directories get a trailing "/" appended to insertText so the user
- * can keep typing.  Hidden files and node_modules are skipped.
- *
- * The LSP client filters by `filterText`, so we set it to the basename only;
- * the editor will match it against the basename the user is currently typing.
- */
 export function listDirAsCompletions(dir: string): CompletionItem[] {
     let entries: fs.Dirent[];
     try {
@@ -199,7 +322,6 @@ export function listDirAsCompletions(dir: string): CompletionItem[] {
             kind: isDir ? CompletionItemKind.Folder : CompletionItemKind.File,
             filterText: label,
             insertText: label,
-            // Sort directories first by prefixing their sort key with "0_".
             sortText: (isDir ? '0_' : '1_') + e.name.toLowerCase(),
         });
     }
@@ -208,14 +330,10 @@ export function listDirAsCompletions(dir: string): CompletionItem[] {
 
 // ── Top-level entry point ─────────────────────────────────────────────────────
 
-/**
- * Resolve `typedPrefix` to disk under the SD root of `currentFileUri`, and
- * return a completion list.  Returns null when no SD root can be located —
- * the caller should fall through to normal completions.
- */
 export function buildPathCompletions(
     typedPrefix: string,
     currentFileUri: string,
+    resolve: PathResolveOptions = {},
 ): CompletionItem[] | null {
     let fsPath: string;
     try {
@@ -223,10 +341,11 @@ export function buildPathCompletions(
     } catch {
         return null;
     }
+
     const sdRoot = findSdRoot(path.dirname(fsPath));
     if (!sdRoot) return null;
 
-    const resolved = resolvePathPrefix(typedPrefix, sdRoot);
+    const resolved = resolvePathPrefix(typedPrefix, sdRoot, resolve);
     if (!resolved) return null;
 
     return listDirAsCompletions(resolved.dir);

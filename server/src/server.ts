@@ -678,9 +678,9 @@ connection.onCompletion((params: CompletionParams): CompletionItem[] => {
   // (`"`, `"0`, `"0:/sys/`, `"config.`); the LSP client filters by basename.
   {
     const tokens = new Lexer(line, params.position.line).tokenize();
-    const ctx = findPathStringContext(tokens, params.position.character);
+    const ctx = findPathStringContext(tokens, params.position.character, line);
     if (ctx) {
-      const items = buildPathCompletions(ctx.typedPrefix, params.textDocument.uri);
+      const items = buildPathCompletions(ctx.typedPrefix, params.textDocument.uri, ctx.resolve);
       // Return [] (empty list, completion *handled*) rather than fall through —
       // we don't want G-code/keyword completions polluting a path context.
       return items ?? [];

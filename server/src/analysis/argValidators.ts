@@ -46,7 +46,13 @@ export type ArgValidator = (a: ArgContext) => Diagnostic[] | Diagnostic | null;
 export type PathCheckMode = 'exists' | 'directory-exists' | 'parent-exists';
 
 export interface PathResolveOptions {
-    /** RRF command-specific default directory for a bare name, without leading slash. */
+    /**
+     * RRF command-specific default directory for relative paths, without leading slash.
+     * Example: M98 P"foo.g" and M98 P"led/red.g" both resolve under /sys.
+     */
+    defaultRelativeDir?: string;
+
+    /** Backward-compatible alias. Used only when defaultRelativeDir is absent. */
     defaultBareDir?: string;
 }
 
@@ -95,7 +101,7 @@ const g29PathValidator: ArgValidator = (a): Diagnostic | null => {
 
     const s = numericArgValue(a.allArgs, 'S');
     const mode: PathCheckMode = s === 3 ? 'parent-exists' : 'exists';
-    return validateStaticPath(literal.text, a.valueTok.line, literal.start, literal.end, a, mode);
+    return validateStaticPath(literal.text, a.valueTok.line, literal.start, literal.end, a, mode, { defaultRelativeDir: 'sys' });
 };
 
 function validateStaticPath(
@@ -123,11 +129,14 @@ function validateStaticPath(
     if (isPathIgnored(relative, a.config.paths.ignore)) return null;
 
     let ok = false;
-    try {
-        const st = fs.statSync(checkPath);
-        ok = mode === 'directory-exists' ? st.isDirectory() : true;
-    } catch {
-        ok = false;
+    const existingCheckPath = resolveExistingPathCaseInsensitive(checkPath);
+    if (existingCheckPath) {
+        try {
+            const st = fs.statSync(existingCheckPath);
+            ok = mode === 'directory-exists' ? st.isDirectory() : true;
+        } catch {
+            ok = false;
+        }
     }
     if (ok) return null;
 
@@ -158,12 +167,10 @@ function validateStaticPath(
  * Common RRF resolution:
  *   0:/sys/config.g  → <sdRoot>/sys/config.g
  *   /sys/config.g    → <sdRoot>/sys/config.g
- *   sys/config.g     → <sdRoot>/sys/config.g
- *   config.g         → <sdRoot>/sys/config.g
  *
- * Some commands use a different default for bare names, e.g. M997 uses
- * directories.firmware (`0:/firmware`) and M956 defaults to
- * `0:/sys/accelerometer`.  Pass `defaultBareDir` for those cases.
+ * Some commands define a default directory for relative paths. For M98 the
+ * default is /sys, so both `M98 P"foo.g"` and `M98 P"led/red.g"` resolve
+ * under `<sdRoot>/sys`. To address the SD root explicitly, use `/...` or `0:/...`.
  */
 export function resolveRrfPathToDisk(
     rrfPath: string,
@@ -177,21 +184,51 @@ export function resolveRrfPathToDisk(
 
     let rest = rrfPath;
     const volMatch = /^\d+:\/?/.exec(rest);
+    const hasVolume = !!volMatch;
     if (volMatch) rest = rest.slice(volMatch[0].length);
 
-    const isAbsolute = rest.startsWith('/');
+    const isAbsolute = hasVolume || rest.startsWith('/');
     rest = rest.replace(/^\/+/, '');
 
-    let abs: string;
-    if (!isAbsolute && !rest.includes('/')) {
-        abs = path.resolve(sdRoot, options.defaultBareDir ?? 'sys', rest);
-    } else {
-        abs = path.resolve(sdRoot, rest);
-    }
+    const defaultRelativeDir = options.defaultRelativeDir ?? options.defaultBareDir;
+    const baseDir = !isAbsolute && defaultRelativeDir
+        ? path.resolve(sdRoot, defaultRelativeDir)
+        : path.resolve(sdRoot);
+
+    const abs = path.resolve(baseDir, rest);
 
     const root = path.resolve(sdRoot);
     if (abs !== root && !abs.startsWith(root + path.sep)) return null;
-    return abs;
+
+    // Workstation mirrors are often case-sensitive, while typical Duet SD-card
+    // filesystems are case-insensitive. If the path already exists with different
+    // casing, return the actual on-disk casing so diagnostics and F12 do not
+    // produce false negatives for paths that the printer accepts.
+    return resolveExistingPathCaseInsensitive(abs) ?? abs;
+}
+
+export function resolveExistingPathCaseInsensitive(absPath: string): string | null {
+    const parsed = path.parse(path.resolve(absPath));
+    const root = parsed.root;
+    const rel = path.relative(root, path.resolve(absPath));
+    const parts = rel.split(path.sep).filter(Boolean);
+
+    let cur = root || path.sep;
+    for (const part of parts) {
+        let entries: fs.Dirent[];
+        try {
+            entries = fs.readdirSync(cur, { withFileTypes: true });
+        } catch {
+            return null;
+        }
+
+        const exact = entries.find(e => e.name === part);
+        const match = exact ?? entries.find(e => e.name.toLowerCase() === part.toLowerCase());
+        if (!match) return null;
+        cur = path.join(cur, match.name);
+    }
+
+    return cur;
 }
 
 /**
@@ -503,25 +540,25 @@ function registerTail(cmd: string, mode: PathCheckMode, resolve?: PathResolveOpt
 }
 
 // G29 P is conditional: S1/S4 load; S3 saves.
-registerCustomArg('G29', 'P', 'exists', g29PathValidator);
+registerCustomArg('G29', 'P', 'exists', g29PathValidator, { defaultRelativeDir: 'sys' });
 
 // Modern lettered path parameters.
 registerArg('M20', 'P', 'directory-exists');        // list folder
 registerArg('M36.1', 'P', 'exists');                // embedded thumbnail data from file
 registerArg('M36.2', 'P', 'exists');                // height-map fragment from file
 registerArg('M37', 'P', 'exists');                  // simulate file
-registerArg('M98', 'P', 'exists');                  // call macro, bare names default to /sys
-registerArg('M374', 'P', 'parent-exists');          // save height map
-registerArg('M375', 'P', 'exists');                 // load height map
+registerArg('M98', 'P', 'exists', { defaultRelativeDir: 'sys' }); // call macro, relative paths default to /sys
+registerArg('M374', 'P', 'parent-exists', { defaultRelativeDir: 'sys' }); // save height map
+registerArg('M375', 'P', 'exists', { defaultRelativeDir: 'sys' }); // load height map
 registerArg('M470', 'P', 'parent-exists');          // create directory
 registerArg('M471', 'S', 'exists');                 // rename/move source
 registerArg('M471', 'T', 'parent-exists');          // rename/move target parent; target may not exist
 registerArg('M472', 'P', 'exists');                 // delete file/directory
-registerArg('M505', 'P', 'directory-exists', { defaultBareDir: 'sys' });
-registerArg('M505.1', 'P', 'directory-exists', { defaultBareDir: 'www' });
+registerArg('M505', 'P', 'directory-exists', { defaultRelativeDir: 'sys' });
+registerArg('M505.1', 'P', 'directory-exists', { defaultRelativeDir: 'www' });
 registerArg('M929', 'P', 'parent-exists');          // event log file, created/appended
-registerArg('M956', 'F', 'parent-exists', { defaultBareDir: 'sys/accelerometer' });
-registerArg('M997', 'P', 'exists', { defaultBareDir: 'firmware' });
+registerArg('M956', 'F', 'parent-exists', { defaultRelativeDir: 'sys/accelerometer' });
+registerArg('M997', 'P', 'exists', { defaultRelativeDir: 'firmware' });
 
 // Legacy bare-tail filename commands.  The official examples use the filename
 // directly after the command, not a P parameter.
