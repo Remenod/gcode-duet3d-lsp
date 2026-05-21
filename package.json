@@ -53,6 +53,24 @@
           "type": "boolean",
           "default": true,
           "description": "Enable LSP for generic non RRF gcode files"
+        },
+        "rrfgcode.argCheck.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Master switch for argument validation of G/M/T commands. When false, no per-argument checks (including path existence) run."
+        },
+        "rrfgcode.argCheck.paths.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn when a string-literal path argument (e.g. M98 P\"sys/foo.g\") refers to a file that does not exist on the SD-card root."
+        },
+        "rrfgcode.argCheck.paths.ignore": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Glob patterns (forward slashes, relative to the SD-card root) for paths that should NOT trigger 'file not found' warnings.\n\nSupported patterns:\n- `sys/legacy.g` — exact file\n- `macros/**` — entire subtree\n- `macros/*.g` — direct children only\n- `{old,new}/*.g` — alternation\n\nPaths are workspace-relative on purpose, so the setting stays portable when the project is moved or shared via version control."
         }
       }
     }
