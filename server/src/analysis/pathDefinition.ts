@@ -20,6 +20,7 @@ import {
     extractTailPath,
     PathResolveOptions,
 } from './argValidators';
+import { functionPathRule } from './pathCompletion';
 
 export function pathLocationAtCursor(
     tokens: Token[],
@@ -49,7 +50,22 @@ export function pathLocationAtCursor(
         }
     }
 
-    // 3. Strict fallback: any string literal that is itself a plausible RRF
+    // 3. Path-taking function argument: fileexists("..."), fileread("...", …).
+    // Uses the same per-function resolve rules as diagnostics and completion,
+    // so e.g. fileexists("probe.g") navigates to sys/probe.g.
+    const strIdx = tokens.findIndex(
+        t => t.type === TokenType.StringLit && t.start <= character && character < t.end,
+    );
+    if (strIdx !== -1) {
+        const fnRule = functionPathRule(tokens, strIdx);
+        const text = fnRule ? stringLiteralText(tokens[strIdx]) : null;
+        if (text && text.text.trim() !== '') {
+            const loc = locationForPath(text.text, uri, fnRule!.resolve);
+            if (loc) return loc;
+        }
+    }
+
+    // 4. Strict fallback: any string literal that is itself a plausible RRF
     // path.  This covers cases such as M291 P"0:/sys/config.g" or echo
     // "macros/foo.g" without treating normal messages as paths.
     const str = stringAtCursor(tokens, character);

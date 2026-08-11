@@ -18,6 +18,7 @@ import * as path from 'path';
 import { URI } from 'vscode-uri';
 import { CompletionItem, CompletionItemKind } from 'vscode-languageserver/node';
 import { Token, TokenType } from '../parser/types';
+import { PATH_FUNCTIONS, PathFunctionRule } from './pathFunctions';
 
 // ── SD-root detection ─────────────────────────────────────────────────────────
 
@@ -141,10 +142,10 @@ function registerTail(cmd: string, resolve?: PathResolveOptions): void {
 // Path parameters mirrored from argValidators.ts. Keep this list narrow: only
 // parameters that are actually filesystem paths should trigger path completion.
 registerArg('G29', 'P', { defaultRelativeDir: 'sys' });
-registerArg('M20', 'P');
-registerArg('M36.1', 'P');
+registerArg('M20', 'P', { defaultRelativeDir: 'gcodes' });
+registerArg('M36.1', 'P', { defaultRelativeDir: 'gcodes' });
 registerArg('M36.2', 'P', { defaultRelativeDir: 'sys' });
-registerArg('M37', 'P');
+registerArg('M37', 'P', { defaultRelativeDir: 'gcodes' });
 registerArg('M98', 'P', { defaultRelativeDir: 'sys' });
 registerArg('M374', 'P', { defaultRelativeDir: 'sys' });
 registerArg('M375', 'P', { defaultRelativeDir: 'sys' });
@@ -158,20 +159,20 @@ registerArg('M929', 'P');
 registerArg('M956', 'F', { defaultRelativeDir: 'sys/accelerometer' });
 registerArg('M997', 'P', { defaultRelativeDir: 'firmware' });
 
-registerTail('M23');
-registerTail('M28');
-registerTail('M30');
-registerTail('M32');
-registerTail('M36');
-registerTail('M38');
+registerTail('M23', { defaultRelativeDir: 'gcodes' });
+registerTail('M28', { defaultRelativeDir: 'gcodes' });
+registerTail('M30', { defaultRelativeDir: 'gcodes' });
+registerTail('M32', { defaultRelativeDir: 'gcodes' });
+registerTail('M36', { defaultRelativeDir: 'gcodes' });
+registerTail('M38', { defaultRelativeDir: 'gcodes' });
 
 // Built-in expression functions whose FIRST string argument is a filesystem
 // path: fileexists("path") and fileread("path", skip, count, sep).  Unlike the
 // command tables above, these can appear anywhere an expression is valid —
 // `echo`, `if`, `var … = …`, `set`, or inside a `{ … }` block on a G-code line
-// — so they are matched independently of any leading G/M/T command.  Relative
-// paths resolve against the SD-card root (no command-specific default folder).
-const PATH_FUNCTIONS = new Set(['fileread', 'fileexists']);
+// — so they are matched independently of any leading G/M/T command.  The
+// per-function resolve rules (fileexists → /sys, fileread → SD root) live in
+// pathFunctions.ts, shared with argValidators and pathDefinition.
 
 /**
  * Returns the StringLit token whose interior contains `character`, plus the
@@ -194,8 +195,9 @@ export function findPathStringContext(
 
         // Function path argument: fileexists("..."), fileread("...", ...).
         // Works on any line, so it is checked before the command-only rules.
-        if (isFunctionPathArg(tokens, i)) {
-            return { tok, typedPrefix, resolve: undefined };
+        const fnRule = functionPathRule(tokens, i);
+        if (fnRule) {
+            return { tok, typedPrefix, resolve: fnRule.resolve };
         }
 
         // Everything below requires a leading G/M/T command.
@@ -224,19 +226,17 @@ export function findPathStringContext(
 }
 
 /**
- * True when the StringLit at `strIdx` is the first argument of a path-taking
- * function call, i.e. the token sequence is `FunctionName ( "…"` where the
- * function is `fileread`/`fileexists`.  Only the first argument is a path, so
- * this deliberately checks that the string immediately follows the `(`.
+ * Returns the path rule when the StringLit at `strIdx` is the first argument
+ * of a path-taking function call, i.e. the token sequence is `FunctionName ( "…"`
+ * where the function is `fileread`/`fileexists`.  Only the first argument is a
+ * path, so this deliberately checks that the string immediately follows the `(`.
  */
-function isFunctionPathArg(tokens: Token[], strIdx: number): boolean {
+export function functionPathRule(tokens: Token[], strIdx: number): PathFunctionRule | null {
     const lparen = strIdx >= 1 ? tokens[strIdx - 1] : null;
     const fn = strIdx >= 2 ? tokens[strIdx - 2] : null;
-    return (
-        !!lparen && lparen.type === TokenType.LParen &&
-        !!fn && fn.type === TokenType.FunctionName &&
-        PATH_FUNCTIONS.has(fn.value.toLowerCase())
-    );
+    if (!lparen || lparen.type !== TokenType.LParen) return null;
+    if (!fn || fn.type !== TokenType.FunctionName) return null;
+    return PATH_FUNCTIONS.get(fn.value.toLowerCase()) ?? null;
 }
 
 function commandNameFromTokens(tokens: Token[]): string | null {

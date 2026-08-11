@@ -12,6 +12,7 @@ import * as path from 'path';
 import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
 import { Token, TokenType } from '../parser/types';
 import { findSdRoot } from './pathCompletion';
+import { PATH_FUNCTIONS } from './pathFunctions';
 import { ArgCheckConfig, isPathIgnored } from './argCheckConfig';
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -474,7 +475,11 @@ export function validateGCodeArgs(
 // `{ … }` block on a G-code line).  Only a static string literal that is
 // unambiguously the first argument is checked; dynamic expressions such as
 // `fileexists(var.path)` or `fileexists("a" ^ var.b)` are left alone.
-const PATH_FUNCTIONS = new Set(['fileread', 'fileexists']);
+//
+// Per-function resolve rules live in pathFunctions.ts (shared with completion
+// and go-to-definition).  Note that fileexists is registered with
+// checkExistence: false — a missing file is its intended use case, so only
+// fileread produces diagnostics here.
 
 export function validateFunctionPathArgs(
     tokens: Token[],
@@ -488,7 +493,8 @@ export function validateFunctionPathArgs(
     for (let i = 0; i < tokens.length; i++) {
         const fn = tokens[i];
         if (fn.type !== TokenType.FunctionName) continue;
-        if (!PATH_FUNCTIONS.has(fn.value.toLowerCase())) continue;
+        const rule = PATH_FUNCTIONS.get(fn.value.toLowerCase());
+        if (!rule || !rule.checkExistence) continue;
 
         const lparen = tokens[i + 1];
         const strTok = tokens[i + 2];
@@ -503,10 +509,9 @@ export function validateFunctionPathArgs(
         const literal = stringLiteralText(strTok);
         if (!literal) continue;
 
-        // Relative paths resolve against the SD-card root (no default folder).
         const diag = validateStaticPath(
             literal.text, strTok.line, literal.start, literal.end,
-            { sdRoot, config }, 'exists',
+            { sdRoot, config }, 'exists', rule.resolve,
         );
         if (diag) diagnostics.push(diag);
     }
@@ -591,10 +596,10 @@ function registerTail(cmd: string, mode: PathCheckMode, resolve?: PathResolveOpt
 registerCustomArg('G29', 'P', 'exists', g29PathValidator, { defaultRelativeDir: 'sys' });
 
 // Modern lettered path parameters.
-registerArg('M20', 'P', 'directory-exists');        // list folder
-registerArg('M36.1', 'P', 'exists');                // embedded thumbnail data from file
-registerArg('M36.2', 'P', 'exists');                // height-map fragment from file
-registerArg('M37', 'P', 'exists');                  // simulate file
+registerArg('M20', 'P', 'directory-exists', { defaultRelativeDir: 'gcodes' }); // list folder, defaults to /gcodes
+registerArg('M36.1', 'P', 'exists', { defaultRelativeDir: 'gcodes' }); // embedded thumbnail data from job file
+registerArg('M36.2', 'P', 'exists', { defaultRelativeDir: 'sys' });    // height-map file, lives in /sys
+registerArg('M37', 'P', 'exists', { defaultRelativeDir: 'gcodes' });   // simulate job file
 registerArg('M98', 'P', 'exists', { defaultRelativeDir: 'sys' }); // call macro, relative paths default to /sys
 registerArg('M374', 'P', 'parent-exists', { defaultRelativeDir: 'sys' }); // save height map
 registerArg('M375', 'P', 'exists', { defaultRelativeDir: 'sys' }); // load height map
@@ -609,10 +614,11 @@ registerArg('M956', 'F', 'parent-exists', { defaultRelativeDir: 'sys/acceleromet
 registerArg('M997', 'P', 'exists', { defaultRelativeDir: 'firmware' });
 
 // Legacy bare-tail filename commands.  The official examples use the filename
-// directly after the command, not a P parameter.
-registerTail('M23', 'exists');                      // select SD file
-registerTail('M28', 'parent-exists');               // begin write to file
-registerTail('M30', 'exists');                      // delete file
-registerTail('M32', 'exists');                      // select file and start print
-registerTail('M36', 'exists');                      // file information
-registerTail('M38', 'exists');                      // CRC32 of file
+// directly after the command, not a P parameter.  All of these operate on job
+// files, so relative paths default to /gcodes (as in the firmware).
+registerTail('M23', 'exists', { defaultRelativeDir: 'gcodes' });        // select SD file
+registerTail('M28', 'parent-exists', { defaultRelativeDir: 'gcodes' }); // begin write to file
+registerTail('M30', 'exists', { defaultRelativeDir: 'gcodes' });        // delete file
+registerTail('M32', 'exists', { defaultRelativeDir: 'gcodes' });        // select file and start print
+registerTail('M36', 'exists', { defaultRelativeDir: 'gcodes' });        // file information
+registerTail('M38', 'exists', { defaultRelativeDir: 'gcodes' });        // CRC32 of file
