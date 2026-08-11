@@ -21,6 +21,10 @@ export function buildHover(
     symbolTable: SymbolTable,
     uri: string,
     lineIndent: number = 0,
+    // Full document lines — lets var lookups respect block closure, so hovering
+    // a var whose block already ended reports it as undeclared (matching the
+    // diagnostics) instead of pointing at the dead declaration.
+    docLines?: string[],
 ): Hover | null {
     const tokIdx = tokens.findIndex(t => t.start <= character && character < t.end);
     if (tokIdx === -1) return null;
@@ -106,7 +110,7 @@ export function buildHover(
             {
                 const prevTok = tokIdx > 0 ? tokens[tokIdx - 1] : null;
                 if (prevTok?.type === TokenType.Var) {
-                    const decl = symbolTable.lookupVarAtLine(val, uri, lineNum, lineIndent);
+                    const decl = symbolTable.lookupVarAtLine(val, uri, lineNum, lineIndent, docLines);
                     if (decl) {
                         return mkHover(
                             `**var.${val}**\n\nScope: \`var\` · Type: \`${decl.inferredType ?? 'unknown'}\` · Declared at line ${decl.line + 1} (indent ${decl.indent})`
@@ -127,7 +131,7 @@ export function buildHover(
 
             if (val.startsWith('var.')) {
                 const name = val.slice(4);
-                const decl = symbolTable.lookupVarAtLine(name, uri, lineNum, lineIndent);
+                const decl = symbolTable.lookupVarAtLine(name, uri, lineNum, lineIndent, docLines);
                 if (!decl) {
                     return mkHover(`**${val}**\n\n⚠️ *Undeclared variable — no \`var ${name} = ...\` found in scope.*`);
                 }
