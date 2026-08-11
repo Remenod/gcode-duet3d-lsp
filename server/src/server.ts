@@ -854,6 +854,8 @@ connection.onCompletion((params: CompletionParams): CompletionItem[] => {
   const line = lines[params.position.line] ?? '';
   const prefix = line.slice(0, params.position.character);
 
+  const lineTokens = new Lexer(line, params.position.line).tokenize();
+
   // ── Path completion inside a G-code parameter string ────────────────────
   //
   // When the cursor sits inside the string literal that follows a G-code
@@ -861,14 +863,30 @@ connection.onCompletion((params: CompletionParams): CompletionItem[] => {
   // entries instead of normal language completions.  Triggers on any prefix
   // (`"`, `"0`, `"0:/sys/`, `"config.`); the LSP client filters by basename.
   {
-    const tokens = new Lexer(line, params.position.line).tokenize();
-    const ctx = findPathStringContext(tokens, params.position.character, line);
+    const ctx = findPathStringContext(lineTokens, params.position.character, line);
     if (ctx) {
       const items = buildPathCompletions(ctx.typedPrefix, params.textDocument.uri, ctx.resolve);
       // Return [] (empty list, completion *handled*) rather than fall through —
       // we don't want G-code/keyword completions polluting a path context.
       return items ?? [];
     }
+  }
+
+  // ── No completions in prose ──────────────────────────────────────────────
+  //
+  // Inside a comment or a non-path string literal (M291 messages, WiFi
+  // passwords, machine names) every completion below is noise — typing
+  // `; TODO check global.` must not pop up the variable list.
+  {
+    const ch = params.position.character;
+    const inProse = lineTokens.some(t => {
+      if (t.type === TokenType.Comment) return ch > t.start;
+      if (t.type === TokenType.StringLit) {
+        return t.unclosed ? ch > t.start : ch > t.start && ch < t.end;
+      }
+      return false;
+    });
+    if (inProse) return [];
   }
 
   // Scoped variable completions — insert only the NAME after the dot
@@ -904,8 +922,9 @@ connection.onCompletion((params: CompletionParams): CompletionItem[] => {
     }));
   }
 
-  // OM completions — triggered after any dotted path
-  const omPrefixMatch = /([a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*(?:\[\d*\])*)\.$/
+  // OM completions — triggered after any dotted path.  Subscripts may appear
+  // after ANY segment (tools[0].retraction.), not just the last one.
+  const omPrefixMatch = /([a-zA-Z_][a-zA-Z0-9_]*(?:\[\d*\])*(?:\.[a-zA-Z_][a-zA-Z0-9_]*(?:\[\d*\])*)*)\.$/
     .exec(prefix);
   if (omPrefixMatch && isOmIndexAvailable()) {
     const omPrefix = omPrefixMatch[1].replace(/\[\d+\]/g, '[]');
@@ -975,8 +994,10 @@ connection.onCompletion((params: CompletionParams): CompletionItem[] => {
     });
   }
 
-  // Named constants
+  // Named constants — only those the meta-commands data file doesn't already
+  // provide (it documents true/false/null/pi/…), so nothing shows up twice.
   for (const name of NAMED_CONSTANTS) {
+    if (name in metaData) continue;
     items.push({ label: name, kind: CompletionItemKind.Constant });
   }
 
@@ -1008,7 +1029,28 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null =
 
   const lines = doc.getText().split(/\r?\n/);
   const lineText = lines[params.position.line] ?? '';
-  const upToCursor = lineText.slice(0, params.position.character);
+
+  // Tokenize so string literals and comments can be excluded: a '(' typed
+  // inside `M291 P"Press min("` or a `; use max(` comment is text, not a call,
+  // and commas inside string arguments must not advance activeParameter.
+  const sigTokens = new Lexer(lineText, params.position.line).tokenize();
+  const cursorCh = params.position.character;
+  const cursorInProse = sigTokens.some(t => {
+    if (t.type === TokenType.Comment) return cursorCh > t.start;
+    if (t.type === TokenType.StringLit) {
+      return t.unclosed ? cursorCh > t.start : cursorCh > t.start && cursorCh < t.end;
+    }
+    return false;
+  });
+  if (cursorInProse) return null;
+
+  // Mask string/char literal contents with spaces before the character walk.
+  const maskedChars = lineText.slice(0, cursorCh).split('');
+  for (const t of sigTokens) {
+    if (t.type !== TokenType.StringLit && t.type !== TokenType.CharLit) continue;
+    for (let k = t.start; k < Math.min(t.end, maskedChars.length); k++) maskedChars[k] = ' ';
+  }
+  const upToCursor = maskedChars.join('');
 
   // Walk backwards to find the innermost open function call
   let depth = 0;
@@ -1091,7 +1133,7 @@ connection.onSignatureHelp((params: SignatureHelpParams): SignatureHelp | null =
 //   ├──────────────┼──────────────────────────────────────────────────────────┤
 //   │  declaration │  the defining name in `var x = …` or `global x = …`     │
 //   │  readonly    │  named constants (pi, true, …) and `param.X` references  │
-//   │  deprecated  │  `>>>` redirect operator                                 │
+//   │  deprecated  │  (reserved — currently unused)                           │
 //   └──────────────┴──────────────────────────────────────────────────────────┘
 //
 // The token-type and modifier indices below MUST match the order in
@@ -1285,12 +1327,10 @@ function styleFor(
     case TokenType.Colon:
     case TokenType.Comma:
     case TokenType.DoubleGt:
-      return { type: ST.operator, mod: 0 };
-
     case TokenType.TripleGt:
-      // Deprecated `>>>` redirect operator — themes that style `deprecated`
-      // (e.g. with strike-through) will pick this up automatically.
-      return { type: ST.operator, mod: MOD.deprecated };
+      // `>>>` (append without newline) is the NEWEST echo redirect form,
+      // added in RRF 3.5beta2 — it must not carry the `deprecated` modifier.
+      return { type: ST.operator, mod: 0 };
 
     // ── G-code parameter words (P, S, R, X, …) ────────────────────────────
     case TokenType.GCodeWord:

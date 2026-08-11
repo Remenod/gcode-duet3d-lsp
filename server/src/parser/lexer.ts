@@ -173,27 +173,32 @@ export class Lexer {
         //   b) Inline G/M command codes — `M42P2S1M42P3S0` is a chain of two
         //      separate commands; the second `M42` must lex as a fresh GCode
         //      token, not as `GCodeWord("M")` + `Integer(42)`.
-        //   c) Member-access continuations — a letter directly after a `.` is a
-        //      field name in a qualified path, e.g. the `machinePosition` in the
-        //      unbraced `move.axes[2].machinePosition`.  The base (`move.axes`)
-        //      is recovered by isQualifiedIdentStart, but the segment after an
-        //      array subscript begins a fresh token whose `.`-prefix is the only
-        //      signal that it continues the path rather than starting a run of
-        //      single-letter parameter words (M, A, C, H, I, N, E, …).
+        //   c) Member-access continuations — a letter directly after `].` is a
+        //      field name continuing a qualified path across an array
+        //      subscript, e.g. the `machinePosition` in the unbraced
+        //      `move.axes[2].machinePosition`.  The base (`move.axes`) is
+        //      recovered by isQualifiedIdentStart; the `].`-prefix is the only
+        //      signal that this segment continues the path rather than
+        //      starting a run of single-letter parameter words.  Requiring the
+        //      `]` keeps trailing-dot floats intact: in `G1 X10.Y20` the `Y`
+        //      follows `0.`, so it stays a parameter word.
         //
         // NOTE: a `T` followed by a digit/`-` is intentionally NOT an exception.
         // Unlike G/M, a mid-command `T` is a parameter letter — the tool number
-        // in `M568 T0`, `M104 S200 T1`, the dialog timeout in `M291 … T10`, etc.
-        // A command line can never take another G/M command as an argument, but
-        // `T` is a valid argument, so here `T<n>` lexes as GCodeWord("T") + value
-        // (a `parameter`), not as a `TCode` tool-change command.  A `T` command
-        // is still recognised when it is the FIRST token of the line (head),
-        // because G-code parameter mode is only entered after the head token.
+        // in `M104 S200 T1` / `M109 T0`, the dialog timeout in `M291 … T10`,
+        // etc.  A command line can never take another G/M command as an
+        // argument, but `T` is a valid argument, so here `T<n>` lexes as
+        // GCodeWord("T") + value (a `parameter`), not as a `TCode` tool-change
+        // command.  A `T` command is still recognised when it is the FIRST
+        // token of the line (head), because G-code parameter mode is only
+        // entered after the head token.
         if (this.inGCodeParamMode && this.braceDepth === 0 && this.isAlpha(c)) {
             const isInlineGM = (c === 'G' || c === 'g' || c === 'M' || c === 'm')
                 && this.pos + 1 < this.src.length
                 && /\d/.test(this.src[this.pos + 1]);
-            const isMemberContinuation = start > 0 && this.src[start - 1] === '.';
+            const isMemberContinuation = start > 1
+                && this.src[start - 1] === '.'
+                && this.src[start - 2] === ']';
 
             if (!isInlineGM && !isMemberContinuation && !this.isQualifiedIdentStart(this.pos)) {
                 this.pos++;
@@ -403,7 +408,15 @@ export class Lexer {
         const src = this.src;
         if (i >= src.length || !/[a-zA-Z_]/.test(src[i])) return false;
         let j = i + 1;
-        while (j < src.length && /[a-zA-Z0-9_]/.test(src[j])) j++;
+        let hasDigit = false;
+        while (j < src.length && /[a-zA-Z0-9_]/.test(src[j])) {
+            if (src[j] >= '0' && src[j] <= '9') hasDigit = true;
+            j++;
+        }
+        // A digit in the first segment means a parameter word glued to a
+        // trailing-dot float ("X10.Y20"), not a qualified identifier — no
+        // var/global/param prefix or Object Model root contains digits.
+        if (hasDigit) return false;
         return j < src.length - 1 && src[j] === '.' && /[a-zA-Z_]/.test(src[j + 1]);
     }
 
