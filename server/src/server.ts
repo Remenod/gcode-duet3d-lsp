@@ -622,6 +622,7 @@ connection.onHover((params: HoverParams): Hover | null => {
     symbolTable,
     params.textDocument.uri,
     lineIndent(line),
+    lines,
   );
 });
 
