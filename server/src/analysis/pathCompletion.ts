@@ -142,10 +142,10 @@ function registerTail(cmd: string, resolve?: PathResolveOptions): void {
 // Path parameters mirrored from argValidators.ts. Keep this list narrow: only
 // parameters that are actually filesystem paths should trigger path completion.
 registerArg('G29', 'P', { defaultRelativeDir: 'sys' });
-registerArg('M20', 'P');
-registerArg('M36.1', 'P');
+registerArg('M20', 'P', { defaultRelativeDir: 'gcodes' });
+registerArg('M36.1', 'P', { defaultRelativeDir: 'gcodes' });
 registerArg('M36.2', 'P', { defaultRelativeDir: 'sys' });
-registerArg('M37', 'P');
+registerArg('M37', 'P', { defaultRelativeDir: 'gcodes' });
 registerArg('M98', 'P', { defaultRelativeDir: 'sys' });
 registerArg('M374', 'P', { defaultRelativeDir: 'sys' });
 registerArg('M375', 'P', { defaultRelativeDir: 'sys' });
@@ -159,12 +159,12 @@ registerArg('M929', 'P');
 registerArg('M956', 'F', { defaultRelativeDir: 'sys/accelerometer' });
 registerArg('M997', 'P', { defaultRelativeDir: 'firmware' });
 
-registerTail('M23');
-registerTail('M28');
-registerTail('M30');
-registerTail('M32');
-registerTail('M36');
-registerTail('M38');
+registerTail('M23', { defaultRelativeDir: 'gcodes' });
+registerTail('M28', { defaultRelativeDir: 'gcodes' });
+registerTail('M30', { defaultRelativeDir: 'gcodes' });
+registerTail('M32', { defaultRelativeDir: 'gcodes' });
+registerTail('M36', { defaultRelativeDir: 'gcodes' });
+registerTail('M38', { defaultRelativeDir: 'gcodes' });
 
 // Built-in expression functions whose FIRST string argument is a filesystem
 // path: fileexists("path") and fileread("path", skip, count, sep).  Unlike the

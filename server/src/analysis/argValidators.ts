@@ -596,10 +596,10 @@ function registerTail(cmd: string, mode: PathCheckMode, resolve?: PathResolveOpt
 registerCustomArg('G29', 'P', 'exists', g29PathValidator, { defaultRelativeDir: 'sys' });
 
 // Modern lettered path parameters.
-registerArg('M20', 'P', 'directory-exists');        // list folder
-registerArg('M36.1', 'P', 'exists');                // embedded thumbnail data from file
-registerArg('M36.2', 'P', 'exists');                // height-map fragment from file
-registerArg('M37', 'P', 'exists');                  // simulate file
+registerArg('M20', 'P', 'directory-exists', { defaultRelativeDir: 'gcodes' }); // list folder, defaults to /gcodes
+registerArg('M36.1', 'P', 'exists', { defaultRelativeDir: 'gcodes' }); // embedded thumbnail data from job file
+registerArg('M36.2', 'P', 'exists', { defaultRelativeDir: 'sys' });    // height-map file, lives in /sys
+registerArg('M37', 'P', 'exists', { defaultRelativeDir: 'gcodes' });   // simulate job file
 registerArg('M98', 'P', 'exists', { defaultRelativeDir: 'sys' }); // call macro, relative paths default to /sys
 registerArg('M374', 'P', 'parent-exists', { defaultRelativeDir: 'sys' }); // save height map
 registerArg('M375', 'P', 'exists', { defaultRelativeDir: 'sys' }); // load height map
@@ -614,10 +614,11 @@ registerArg('M956', 'F', 'parent-exists', { defaultRelativeDir: 'sys/acceleromet
 registerArg('M997', 'P', 'exists', { defaultRelativeDir: 'firmware' });
 
 // Legacy bare-tail filename commands.  The official examples use the filename
-// directly after the command, not a P parameter.
-registerTail('M23', 'exists');                      // select SD file
-registerTail('M28', 'parent-exists');               // begin write to file
-registerTail('M30', 'exists');                      // delete file
-registerTail('M32', 'exists');                      // select file and start print
-registerTail('M36', 'exists');                      // file information
-registerTail('M38', 'exists');                      // CRC32 of file
+// directly after the command, not a P parameter.  All of these operate on job
+// files, so relative paths default to /gcodes (as in the firmware).
+registerTail('M23', 'exists', { defaultRelativeDir: 'gcodes' });        // select SD file
+registerTail('M28', 'parent-exists', { defaultRelativeDir: 'gcodes' }); // begin write to file
+registerTail('M30', 'exists', { defaultRelativeDir: 'gcodes' });        // delete file
+registerTail('M32', 'exists', { defaultRelativeDir: 'gcodes' });        // select file and start print
+registerTail('M36', 'exists', { defaultRelativeDir: 'gcodes' });        // file information
+registerTail('M38', 'exists', { defaultRelativeDir: 'gcodes' });        // CRC32 of file
