@@ -465,6 +465,54 @@ export function validateGCodeArgs(
     return diagnostics;
 }
 
+// ── Function path-argument validation ─────────────────────────────────────────
+//
+// Some built-in expression functions take a filesystem path as their first
+// argument: `fileexists("path")` and `fileread("path", skip, count, sep)`.
+// These are not G/M/T command arguments, so they are validated independently of
+// the command tables and can occur on ANY line (echo, if, var, set, or inside a
+// `{ … }` block on a G-code line).  Only a static string literal that is
+// unambiguously the first argument is checked; dynamic expressions such as
+// `fileexists(var.path)` or `fileexists("a" ^ var.b)` are left alone.
+const PATH_FUNCTIONS = new Set(['fileread', 'fileexists']);
+
+export function validateFunctionPathArgs(
+    tokens: Token[],
+    sdRoot: string | null,
+    config: ArgCheckConfig,
+): Diagnostic[] {
+    if (!config.enabled || !config.paths.enabled) return [];
+    if (!sdRoot) return [];
+
+    const diagnostics: Diagnostic[] = [];
+    for (let i = 0; i < tokens.length; i++) {
+        const fn = tokens[i];
+        if (fn.type !== TokenType.FunctionName) continue;
+        if (!PATH_FUNCTIONS.has(fn.value.toLowerCase())) continue;
+
+        const lparen = tokens[i + 1];
+        const strTok = tokens[i + 2];
+        const after = tokens[i + 3];
+        if (!lparen || lparen.type !== TokenType.LParen) continue;
+        if (!strTok || strTok.type !== TokenType.StringLit || strTok.unclosed) continue;
+        // The string must be the WHOLE first argument: it is followed by ',' (more
+        // args) or ')' (single-arg call).  Anything else means it is part of a
+        // larger, dynamic expression that we must not second-guess.
+        if (!after || (after.type !== TokenType.RParen && after.type !== TokenType.Comma)) continue;
+
+        const literal = stringLiteralText(strTok);
+        if (!literal) continue;
+
+        // Relative paths resolve against the SD-card root (no default folder).
+        const diag = validateStaticPath(
+            literal.text, strTok.line, literal.start, literal.end,
+            { sdRoot, config }, 'exists',
+        );
+        if (diag) diagnostics.push(diag);
+    }
+    return diagnostics;
+}
+
 // ── Per-document SD-root cache ────────────────────────────────────────────────
 
 const sdRootCache = new Map<string, string | null>();

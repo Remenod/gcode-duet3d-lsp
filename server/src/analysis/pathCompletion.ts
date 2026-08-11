@@ -165,6 +165,14 @@ registerTail('M32');
 registerTail('M36');
 registerTail('M38');
 
+// Built-in expression functions whose FIRST string argument is a filesystem
+// path: fileexists("path") and fileread("path", skip, count, sep).  Unlike the
+// command tables above, these can appear anywhere an expression is valid —
+// `echo`, `if`, `var … = …`, `set`, or inside a `{ … }` block on a G-code line
+// — so they are matched independently of any leading G/M/T command.  Relative
+// paths resolve against the SD-card root (no command-specific default folder).
+const PATH_FUNCTIONS = new Set(['fileread', 'fileexists']);
+
 /**
  * Returns the StringLit token whose interior contains `character`, plus the
  * already-typed prefix. Returns null unless the string is in a known RRF path
@@ -176,7 +184,6 @@ export function findPathStringContext(
     lineText = '',
 ): StringContext | null {
     const commandName = commandNameFromTokens(tokens);
-    if (!commandName) return null;
 
     for (let i = 0; i < tokens.length; i++) {
         const tok = tokens[i];
@@ -184,6 +191,15 @@ export function findPathStringContext(
         if (!isInsideString(tok, character)) continue;
 
         const typedPrefix = typedPrefixAt(tok, character);
+
+        // Function path argument: fileexists("..."), fileread("...", ...).
+        // Works on any line, so it is checked before the command-only rules.
+        if (isFunctionPathArg(tokens, i)) {
+            return { tok, typedPrefix, resolve: undefined };
+        }
+
+        // Everything below requires a leading G/M/T command.
+        if (!commandName) return null;
 
         // Lettered path argument: M98 P"...", M471 S"...", etc.
         const prev = i > 0 ? tokens[i - 1] : null;
@@ -205,6 +221,22 @@ export function findPathStringContext(
         return null;
     }
     return null;
+}
+
+/**
+ * True when the StringLit at `strIdx` is the first argument of a path-taking
+ * function call, i.e. the token sequence is `FunctionName ( "…"` where the
+ * function is `fileread`/`fileexists`.  Only the first argument is a path, so
+ * this deliberately checks that the string immediately follows the `(`.
+ */
+function isFunctionPathArg(tokens: Token[], strIdx: number): boolean {
+    const lparen = strIdx >= 1 ? tokens[strIdx - 1] : null;
+    const fn = strIdx >= 2 ? tokens[strIdx - 2] : null;
+    return (
+        !!lparen && lparen.type === TokenType.LParen &&
+        !!fn && fn.type === TokenType.FunctionName &&
+        PATH_FUNCTIONS.has(fn.value.toLowerCase())
+    );
 }
 
 function commandNameFromTokens(tokens: Token[]): string | null {
