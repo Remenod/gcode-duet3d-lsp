@@ -71,5 +71,35 @@
         "title": "Variable assignment",
         "description": "`set var.<existing-local-variable-name> = <expression>`\n`set global.<existing-global-variable-name> = <expression>`\n\nThis re-assigns an existing variable (which must be of the form `var.name` or `global.name`) to have the value `expression`.\n\n Example:\n`set global.T1heat=heat.heaters[1].active`",
         "anchor": "#variable-assignment"
+    },
+    "if": {
+        "title": "Conditional construct",
+        "description": "The general form of the conditional block is:\n\n```\nif <boolean-expression>\n  ...\nelif <boolean-expression>\n  ...\nelse\n  ...\n```\n\nwhere as usual the \"elif\" part can be omitted or repeated, and the \"else\" part can be omitted. The bodies of the if, elif and else parts may contain ordinary GCode commands and/or program elements. Each line in the body must be indented from the corresponding keyword to indicate the extent of the body. The body ends just before the first line that is not indented.",
+        "anchor": "#conditional-construct"
+    },
+    "elif": {
+        "title": "Conditional construct",
+        "description": "Part of the conditional construct:\n\n```\nif <boolean-expression>\n  ...\nelif <boolean-expression>\n  ...\nelse\n  ...\n```\n\nAs usual the \"elif\" part can be omitted or repeated. It must directly follow the `if` (or a previous `elif`) block at the same indentation. The bodies of the if, elif and else parts may contain ordinary GCode commands and/or program elements. Each line in the body must be indented from the corresponding keyword to indicate the extent of the body. The body ends just before the first line that is not indented.",
+        "anchor": "#conditional-construct"
+    },
+    "else": {
+        "title": "Conditional construct",
+        "description": "Part of the conditional construct:\n\n```\nif <boolean-expression>\n  ...\nelif <boolean-expression>\n  ...\nelse\n  ...\n```\n\nAs usual the \"else\" part can be omitted. It must directly follow the `if` or `elif` block at the same indentation. The bodies of the if, elif and else parts may contain ordinary GCode commands and/or program elements. Each line in the body must be indented from the corresponding keyword to indicate the extent of the body. The body ends just before the first line that is not indented.",
+        "anchor": "#conditional-construct"
+    },
+    "while": {
+        "title": "Loop",
+        "description": "```\nwhile <boolean-expression>\n  ...\n```\n\nThe body must be indented from the while keyword. The body ends just before the first line that is not indented.\n\nWithin the while-part and the body, the named constant *iterations* is the number of loop iterations already completed. So it is zero during the first iteration, 1 during the second, and so on.\n\nA loop may contain one or more break statements and/or continue statements, which would normally be inside if-constructs.\n\nIf a while loop is used in a GCode job file (not in a macro), it should have M400 at the end, and immediately before any uses of 'continue' within the loop.\n\n**Caution!** If a loop iterates forever, you will not be able to break out of it except by resetting the machine. When writing a loop, we suggest that you always either ensure that the maximum number of iterations is bounded and not too large, or there is a manual interaction in the loop (e.g. a M291 command) that provides a means to exit the loop.\n\nNested loops have an *iterations* counter at each nested level of the loop. Only the *iterations* counter of the loop that is being executed is accessible within that loop.",
+        "anchor": "#loop"
+    },
+    "break": {
+        "title": "Loop",
+        "description": "A loop may contain one or more break statements, which would normally be inside if-constructs:\n\n```\nwhile <boolean-expression>\n  ...\n  if <boolean-expression>\n    break\n  ...\n```\n\nThe break statement transfers control to the line following the end of the loop body.",
+        "anchor": "#loop"
+    },
+    "continue": {
+        "title": "Loop",
+        "description": "A loop may also contain one or more continue statements, which would normally be inside if-constructs:\n\n```\nwhile <boolean-expression>\n  ...\n  if <boolean-expression>\n    continue\n  ...\n```\n\nThe continue statement increments the iteration counter and transfers control back to the start of the loop, ready to evaluate the while-condition again.\n\nIf a while loop is used in a GCode job file (not in a macro), it should have M400 at the end, and immediately before any uses of 'continue' within the loop.",
+        "anchor": "#loop"
     }
 }
