@@ -86,5 +86,30 @@
         "title": "Ternary operator",
         "description": "The expression `expr1 ? expr2 : expr3` evaluates `expr2` if `expr1` is true, otherwise `expr3`. `expr1` must be Boolean. expr3 may be another ternary expression. The ternary operator has precedence 1.",
         "anchor": "#ternary-operator"
+    },
+    "&": {
+        "title": "Binary infix operator",
+        "description": "**Signature**: `(bool,bool)->bool`\n\nLogical AND.\n\n*Note: `&` and `&&` are equivalent in RRF.*",
+        "anchor": "#binary-infix-operators"
+    },
+    "|": {
+        "title": "Binary infix operator",
+        "description": "**Signature**: `(bool,bool)->bool`\n\nLogical OR.\n\n*Note: `|` and `||` are equivalent in RRF.*",
+        "anchor": "#binary-infix-operators"
+    },
+    "=": {
+        "title": "Binary infix operator / assignment",
+        "description": "**Signature**: `(X,X)->bool`\n\nEquality (X stands for any type). Either the two operands must have the same type or one of them must be the constant null.\n\n*Note: `=` and `==` are equivalent in RRF expressions. In `var`, `global` and `set` statements, `=` is the assignment symbol.*",
+        "anchor": "#binary-infix-operators"
+    },
+    ">>": {
+        "title": "Echo redirect (append)",
+        "description": "`echo >>\"<filename>\" <expression>, <expression>, ...`\n\nAppends a line to an existing file (or creates a new file if it doesn't already exist). There must be no spaces between the `>>` symbol and the filename. The default folder for the file is /sys.",
+        "anchor": "#echo-command"
+    },
+    ">>>": {
+        "title": "Echo redirect (append without newline)",
+        "description": "`echo >>>\"<filename>\" <expression>, <expression>, ...`\n\nAppends to a file without adding a newline character at the end, so that multiple echo commands can be used to build a single long line (supported in firmware 3.5beta2 and later). There must be no spaces between the `>>>` symbol and the filename. The default folder for the file is /sys.",
+        "anchor": "#echo-command"
     }
 }

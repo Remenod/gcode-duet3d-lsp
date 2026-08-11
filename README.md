@@ -30,6 +30,8 @@ A lightweight Language Server Protocol (LSP) extension for VS Code that provides
   - **Ignore this file** — adds the exact path to the ignore list.
   - **Ignore directory** — ignores the entire subdirectory tree.
   Both populate `.vscode/settings.json` automatically and can be checked into version control.
+* **Function path arguments**: The path argument of `fileread("...")` is validated and auto-completed, and both `fileread` and `fileexists` support path completion and Go to Definition. `fileexists` relative paths resolve against `/sys` (as in the firmware); its target is deliberately NOT flagged when missing — testing for an absent file is the function's purpose.
+* **Command line length check**: Commands longer than the firmware's G-code input buffer are flagged as errors. Only the command part counts (comments, indentation, `N` line numbers and `*` checksums are excluded), measured in UTF-8 bytes as the firmware does. Quick fixes can raise the limit or disable the check; see `rrfgcode.maxLineLength`.
 * **Extensible validator framework**: The validation system is designed for easy extension. Adding new per-parameter checks, such as numeric ranges or enum values, requires minimal code.
 
 ### File Path Go to Definition
@@ -70,6 +72,7 @@ Fallback path detection is intentionally conservative. It only treats a string a
 This extension contributes the following settings:
 
 * `rrfgcode.activateOnGenericGcode` (bool, default `true`): Enable LSP features for generic non-RRF G-code files.
+* `rrfgcode.maxLineLength` (integer, default `255`): Report an error when a command exceeds this many bytes. Only the command part counts — indentation, `N` line numbers, `*` checksums and `;` comments are excluded, because RepRapFirmware never stores them in its G-code input buffer. The default matches current firmware (256-byte buffer including the terminator); older RRF 3.0–3.3 builds only accept 100–160 bytes. Set to `0` to disable the check.
 
 ### Argument Validation Settings
 

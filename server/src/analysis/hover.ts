@@ -169,6 +169,7 @@ export function buildHover(
         case TokenType.Star:
         case TokenType.Slash:
         case TokenType.Caret:
+        case TokenType.Eq:
         case TokenType.EqEq:
         case TokenType.NEq:
         case TokenType.Lt:
