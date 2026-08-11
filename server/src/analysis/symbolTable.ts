@@ -117,18 +117,33 @@ export class SymbolTable {
     }
 
     // ── Scope-aware var lookup ────────────────────────────────────────────────
-    lookupVarAtLine(name: string, uri: string, refLine: number, refIndent: number): VariableDecl | undefined {
+    //
+    // When `docLines` is provided the declaration's block must still be OPEN at
+    // the reference line (same closure walk as isDuplicateVarDecl) — otherwise a
+    // var from an already-finished sibling block would wrongly resolve.
+    // `strictBefore` excludes declarations on the reference line itself; used
+    // when validating a declaration's own initializer, where the firmware does
+    // not consider the new variable to exist yet (`var x = var.x` is an error).
+    lookupVarAtLine(
+        name: string,
+        uri: string,
+        refLine: number,
+        refIndent: number,
+        docLines?: string[],
+        strictBefore = false,
+    ): VariableDecl | undefined {
         const decls = this.locals.get(uri)?.get(name) ?? [];
         let best: VariableDecl | undefined;
         for (const d of decls) {
-            if (d.line <= refLine && d.indent <= refIndent) {
-                if (
-                    !best ||
-                    d.indent > best.indent ||
-                    (d.indent === best.indent && d.line > best.line)
-                ) {
-                    best = d;
-                }
+            if (strictBefore ? d.line >= refLine : d.line > refLine) continue;
+            if (d.indent > refIndent) continue;
+            if (docLines && !this._isPriorDeclInScope(d.line, d.indent, refLine, docLines)) continue;
+            if (
+                !best ||
+                d.indent > best.indent ||
+                (d.indent === best.indent && d.line > best.line)
+            ) {
+                best = d;
             }
         }
         return best;

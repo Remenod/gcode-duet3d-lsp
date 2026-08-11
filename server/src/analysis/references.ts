@@ -6,7 +6,9 @@
 import { ReferenceParams, Location } from 'vscode-languageserver/node';
 import { Lexer } from '../parser/lexer';
 import { findTokenAtChar, resolveVariableToken } from './utils';
-import { findOccurrencesInDoc, occurrencesToLocations } from './occurrences';
+import {
+    findOccurrencesInDoc, filterVarOccurrencesByScope, occurrencesToLocations,
+} from './occurrences';
 
 /**
  * @param params       Standard LSP ReferenceParams.
@@ -43,7 +45,14 @@ export function buildReferences(
     const locations: Location[] = [];
 
     for (const [uri, text] of docsToSearch) {
-        const spans = findOccurrencesInDoc(text, scope, baseName);
+        let spans = findOccurrencesInDoc(text, scope, baseName);
+        // Same-named vars in sibling blocks are different variables — list
+        // only occurrences of the one under the cursor.
+        if (scope === 'var') {
+            spans = filterVarOccurrencesByScope(
+                spans, text, params.position.line, params.position.character,
+            );
+        }
 
         // LSP spec: includeDeclaration controls whether the declaration site is returned.
         const filtered = params.context.includeDeclaration

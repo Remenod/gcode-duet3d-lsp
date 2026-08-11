@@ -11,7 +11,7 @@
 import { RenameParams, WorkspaceEdit, TextEdit } from 'vscode-languageserver/node';
 import { Lexer } from '../parser/lexer';
 import { findTokenAtChar, resolveVariableToken } from './utils';
-import { findOccurrencesInDoc } from './occurrences';
+import { findOccurrencesInDoc, filterVarOccurrencesByScope } from './occurrences';
 
 /**
  * @param params       Standard LSP RenameParams (position + newName).
@@ -60,7 +60,14 @@ export function buildRenameEdit(
     const changes: Record<string, TextEdit[]> = {};
 
     for (const [uri, text] of docsToSearch) {
-        const spans = findOccurrencesInDoc(text, scope, baseName);
+        let spans = findOccurrencesInDoc(text, scope, baseName);
+        // Same-named vars in sibling blocks are different variables — rename
+        // only the one the cursor is on.
+        if (scope === 'var') {
+            spans = filterVarOccurrencesByScope(
+                spans, text, params.position.line, params.position.character,
+            );
+        }
         if (spans.length === 0) continue;
 
         changes[uri] = spans.map(s =>

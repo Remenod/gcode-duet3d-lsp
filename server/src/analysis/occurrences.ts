@@ -72,6 +72,72 @@ export function findOccurrencesInDoc(
     return results;
 }
 
+// ── Scope-aware filtering for `var` symbols ────────────────────────────────────
+//
+// Two `var foo` declarations in sibling blocks are DIFFERENT variables (each
+// dies at its block's end), so rename/references must not lump them together.
+// Every usage is resolved to its declaration with the same indentation rules
+// the symbol table uses (deepest still-open declaration at or above the usage
+// line), and only the group containing the cursor's symbol is kept.
+
+/**
+ * Restrict `spans` (all occurrences of one var name in a document) to the
+ * single variable the cursor position refers to.
+ */
+export function filterVarOccurrencesByScope(
+    spans: OccurrenceSpan[],
+    docText: string,
+    cursorLine: number,
+    cursorCharacter: number,
+): OccurrenceSpan[] {
+    const lines = docText.split(/\r?\n/);
+    const indentOf = (l: number): number => {
+        const text = lines[l] ?? '';
+        let i = 0;
+        while (i < text.length && (text[i] === ' ' || text[i] === '\t')) i++;
+        return i;
+    };
+
+    const decls = spans.filter(s => s.isDeclaration);
+
+    // True while no line between declLine and refLine closes the decl's block.
+    const blockStillOpen = (declLine: number, declIndent: number, refLine: number): boolean => {
+        for (let k = declLine + 1; k < refLine; k++) {
+            const raw = lines[k] ?? '';
+            const trimmed = raw.trimStart();
+            if (trimmed === '' || trimmed.startsWith(';')) continue;
+            if (indentOf(k) < declIndent) return false;
+        }
+        return true;
+    };
+
+    const resolveDecl = (s: OccurrenceSpan): OccurrenceSpan | undefined => {
+        if (s.isDeclaration) return s;
+        const refIndent = indentOf(s.line);
+        let best: OccurrenceSpan | undefined;
+        let bestIndent = -1;
+        for (const d of decls) {
+            if (d.line > s.line) continue;
+            const dIndent = indentOf(d.line);
+            if (dIndent > refIndent) continue;
+            if (!blockStillOpen(d.line, dIndent, s.line)) continue;
+            if (!best || dIndent > bestIndent || (dIndent === bestIndent && d.line > best.line)) {
+                best = d;
+                bestIndent = dIndent;
+            }
+        }
+        return best;
+    };
+
+    const cursorSpan = spans.find(
+        s => s.line === cursorLine && s.start <= cursorCharacter && cursorCharacter <= s.end,
+    );
+    if (!cursorSpan) return spans;
+
+    const target = resolveDecl(cursorSpan);
+    return spans.filter(s => resolveDecl(s) === target);
+}
+
 // ── Conversion helpers ─────────────────────────────────────────────────────────
 
 /** Convert OccurrenceSpans to LSP Location objects. */
