@@ -1,6 +1,7 @@
 // parser/expression.ts
 
 import { Token, TokenType } from './types';
+import { lineIndent } from '../analysis/utils';
 
 export interface ParseError {
   message: string;
@@ -157,6 +158,16 @@ export class ExpressionValidator {
       if (this.current().type === TokenType.EOF) break;
       this.parseInternal(0);
     }
+    // The firmware requires a ',' between expressions and rejects anything
+    // else with "expected ','" — mirror that instead of silently accepting
+    // leftover tokens (`echo var.a var.b`).
+    const leftover = this.current();
+    if (leftover.type !== TokenType.EOF && leftover.type !== TokenType.Comment) {
+      const hint = this.isValueLike(leftover)
+        ? " — expected ',' between expressions"
+        : '';
+      this.addError(`unexpected '${leftover.value}'${hint}`, leftover);
+    }
     return this.errors;
   }
 
@@ -175,14 +186,12 @@ export class ExpressionValidator {
       // ── Unary arithmetic sign  +  - ─────────────────────────────────────
       case TokenType.Minus:
       case TokenType.Plus: {
-        // Count consecutive sign operators to catch `------1` style mistakes.
+        // Count consecutive IDENTICAL sign operators to catch `------1` style
+        // mistakes.  Mixed runs like `+-+1` are valid RRF (unary +/- nest
+        // freely in the firmware parser) and must not be flagged.
         let count = 0;
         let scan = this.pos;
-        while (
-          scan < this.tokens.length &&
-          (this.tokens[scan].type === TokenType.Minus ||
-            this.tokens[scan].type === TokenType.Plus)
-        ) {
+        while (scan < this.tokens.length && this.tokens[scan].type === t.type) {
           count++;
           scan++;
         }
@@ -353,7 +362,17 @@ export class ExpressionValidator {
     if (funcName === 'exists') {
       this.expect(TokenType.LParen, "expected '(' after 'exists'");
       if (this.current().type === TokenType.Hash) this.advance();
-      this.parseIdentifierExpression();
+      const arg = this.current();
+      if (arg.type === TokenType.Identifier || this.isKnownWordToken(arg)) {
+        this.parseIdentifierExpression();
+      } else {
+        // The firmware rejects exists() without a name with
+        // "expected an identifier".
+        this.addError(
+          `expected a variable or object-model name in 'exists(...)'`,
+          arg.type === TokenType.EOF ? nameTok : arg,
+        );
+      }
       this.expect(TokenType.RParen, "expected ')' after exists argument");
       return;
     }
@@ -573,6 +592,22 @@ export function validateLine(
   // errors regardless of which command the line represents.
   checkBracketBalance(tokens, errors);
 
+  // 'iterations' is only defined inside a while loop (the firmware throws
+  // "'iterations' used when not inside a loop").  The while line itself is
+  // fine — its condition is re-evaluated on every pass.
+  if (
+    ctx?.docLines &&
+    first.type !== TokenType.While &&
+    tokens.some(t => t.type === TokenType.Iterations) &&
+    !hasEnclosingWhile(ctx.docLines, ctx.line, ctx.indent)
+  ) {
+    const tok = tokens.find(t => t.type === TokenType.Iterations)!;
+    errors.push({
+      message: `'iterations' may only be used inside a 'while' loop`,
+      ...span(tok),
+    });
+  }
+
   // ── echo [> file] expr, expr, … ─────────────────────────────────────────
   if (first.type === TokenType.Echo) {
     let exprStart = 1;
@@ -584,6 +619,20 @@ export function validateLine(
     ) {
       exprStart++;
       const filenameTok = tokens[exprStart];
+
+      // The wiki: "There must be no spaces between the >, >> or >>> symbol
+      // and <filename>" — the firmware reads the filename immediately after
+      // the redirect characters with no whitespace skip.
+      if (
+        filenameTok &&
+        (filenameTok.type === TokenType.StringLit || filenameTok.type === TokenType.LBrace) &&
+        filenameTok.start !== redirectTok.end
+      ) {
+        errors.push({
+          message: `no space allowed between '${redirectTok.value}' and the filename`,
+          ...span(filenameTok),
+        });
+      }
 
       if (filenameTok?.type === TokenType.StringLit) {
         exprStart++;
@@ -605,10 +654,12 @@ export function validateLine(
           if (ctx) errors.push(...checkDeclaredVars(redirectTokens, ctx));
           if (ctx?.isValidOmPath) errors.push(...checkBareIdentifiers(redirectTokens, ctx));
         }
-      } else if (filenameTok && filenameTok.type !== TokenType.EOF) {
+      } else {
+        // Anything else — including end of line (`echo >`) — is rejected by
+        // the firmware with "expected a string expression".
         errors.push({
           message: 'expected a quoted filename or {expression} after redirect operator',
-          ...span(filenameTok),
+          ...span(filenameTok && filenameTok.type !== TokenType.EOF ? filenameTok : redirectTok),
         });
         return errors;
       }
@@ -628,6 +679,9 @@ export function validateLine(
     first.type === TokenType.Elif ||
     first.type === TokenType.While
   ) {
+    if (first.type === TokenType.Elif && ctx?.docLines) {
+      checkConditionalChain(first, ctx, errors);
+    }
     const exprTokens = tokens.slice(1);
     if (
       exprTokens.length === 0 ||
@@ -648,6 +702,7 @@ export function validateLine(
 
   // ── else — must stand alone, never takes a condition ──────────────────────
   if (first.type === TokenType.Else) {
+    if (ctx?.docLines) checkConditionalChain(first, ctx, errors);
     const nextTok = tokens[1];
     if (nextTok && nextTok.type !== TokenType.EOF && nextTok.type !== TokenType.Comment) {
       errors.push({
@@ -923,6 +978,14 @@ export function validateLine(
     checkAdjacentNumberString(tokens, errors);
     errors.push(...checkDuplicateGCodeParams(tokens));
     if (ctx) errors.push(...checkDeclaredVars(tokens, ctx));
+    // {…} blocks hold real expressions — run them through the expression
+    // validator so syntax and function-arity errors are reported here just
+    // like on echo/if/var lines.  Each group may be a single expression or an
+    // array literal's comma list, so validate as a comma-separated list.
+    for (const group of extractGCodeExprGroups(tokens)) {
+      if (group.length === 0) continue;
+      errors.push(...new ExpressionValidator(group).validateCommaList());
+    }
     // Only check bare identifiers that are INSIDE {…} expression blocks.
     // Bare G-code parameter letters (P, R, S, K, F …) outside braces are not
     // expressions and must NOT be validated as Object Model paths.
@@ -930,12 +993,20 @@ export function validateLine(
     return errors;
   }
 
-  // ── Valid standalone meta keywords (no further validation needed) ─────────
+  // ── Valid standalone meta keywords ─────────────────────────────────────────
   if (
     first.type === TokenType.Break ||
-    first.type === TokenType.Continue ||
-    first.type === TokenType.Skip
+    first.type === TokenType.Continue
   ) {
+    if (ctx?.docLines && !hasEnclosingWhile(ctx.docLines, ctx.line, ctx.indent)) {
+      errors.push({
+        message: `'${first.value}' is not inside a 'while' loop`,
+        ...span(first),
+      });
+    }
+    return errors;
+  }
+  if (first.type === TokenType.Skip) {
     return errors;
   }
 
@@ -972,6 +1043,85 @@ function extractGCodeExprTokens(tokens: Token[]): Token[] {
     if (depth > 0) result.push(t);
   }
   return result;
+}
+
+// Like extractGCodeExprTokens, but keeps each top-level {…} group separate and
+// preserves nested braces inside it (they are array literals within the
+// expression).  Unterminated groups are dropped — checkBracketBalance already
+// reports those.
+function extractGCodeExprGroups(tokens: Token[]): Token[][] {
+  const groups: Token[][] = [];
+  let current: Token[] | null = null;
+  let depth = 0;
+  for (const t of tokens) {
+    if (t.type === TokenType.EOF || t.type === TokenType.Comment) break;
+    if (t.type === TokenType.LBrace) {
+      depth++;
+      if (depth === 1) { current = []; continue; }
+    } else if (t.type === TokenType.RBrace) {
+      if (depth > 0) depth--;
+      if (depth === 0 && current) { groups.push(current); current = null; continue; }
+    }
+    if (depth > 0 && current) current.push(t);
+  }
+  return groups;
+}
+
+// ── Block-structure helpers ──────────────────────────────────────────────────
+//
+// RRF blocks are defined purely by indentation: "A block starts at the first
+// line that is indented further than the preceding line".  These helpers
+// reconstruct just enough of that structure to reject constructs the firmware
+// aborts on at runtime.
+
+/** True when `line` is blank or a whole-line comment (ignored by block rules). */
+function isBlankOrComment(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed === '' || trimmed.startsWith(';');
+}
+
+/**
+ * Walks upward looking for the `while` that opens the block containing
+ * `refLine`.  Every line with a smaller indent than the current block level is
+ * that block's opener; if it is not a `while` (if/elif/else), the search
+ * continues in the enclosing block.  Mirrors the firmware errors
+ * "'break'/'continue' was not inside a loop".
+ */
+function hasEnclosingWhile(docLines: string[], refLine: number, refIndent: number): boolean {
+  let cur = refIndent;
+  for (let l = refLine - 1; l >= 0; l--) {
+    const text = docLines[l];
+    if (text === undefined || isBlankOrComment(text)) continue;
+    const ind = lineIndent(text);
+    if (ind >= cur) continue;
+    if (/^while\b/i.test(text.trim())) return true;
+    cur = ind;
+    if (cur === 0) break;
+  }
+  return false;
+}
+
+/**
+ * Validates that an `elif`/`else` line continues a conditional chain: the
+ * nearest preceding non-blank line at the SAME indent must be `if` or `elif`
+ * (any same-indent statement in between breaks the chain, and a shallower
+ * line means the block never had an `if` at all).  Mirrors the firmware
+ * errors "'else' did not follow 'if'" / "'elif' did not follow 'if'".
+ */
+function checkConditionalChain(first: Token, ctx: DiagnosticContext, errors: ParseError[]): void {
+  const docLines = ctx.docLines!;
+  for (let l = ctx.line - 1; l >= 0; l--) {
+    const text = docLines[l];
+    if (text === undefined || isBlankOrComment(text)) continue;
+    const ind = lineIndent(text);
+    if (ind > ctx.indent) continue;      // body of the preceding block
+    if (ind === ctx.indent && /^(if|elif)\b/i.test(text.trim())) return;
+    break;                               // chain broken or left the block
+  }
+  errors.push({
+    message: `'${first.value}' does not follow an 'if' or 'elif' block at the same indentation`,
+    ...span(first),
+  });
 }
 
 // ── Bare identifier OM check ─────────────────────────────────────────────────
@@ -1048,8 +1198,16 @@ function isInsideExistsArg(tokens: Token[], idx: number): boolean {
 // Inline G/M chains like `M42P2S1M42P3S0` contain two separate commands; each
 // command resets its own parameter set.  We detect a new inline command by
 // the appearance of a second GCode/TCode token in the stream.
+// Commands whose arguments are free text rather than parameter words: M117
+// shows a message ("Quotation marks … recommended but not mandatory" per the
+// wiki), M550 sets the machine name, and the legacy SD-file commands take an
+// unquoted filename tail.  Their letters must not be treated as parameters.
+const RAW_TEXT_COMMANDS = new Set(['M117', 'M550', 'M23', 'M28', 'M30', 'M32', 'M36', 'M38']);
+
 function checkDuplicateGCodeParams(tokens: Token[]): ParseError[] {
   const errors: ParseError[] = [];
+  const head = tokens[0];
+  if (head && RAW_TEXT_COMMANDS.has(head.value.toUpperCase())) return errors;
   let seen = new Map<string, Token>();   // letter → first occurrence
 
   for (let i = 1; i < tokens.length; i++) {  // skip the leading G/M/T token
