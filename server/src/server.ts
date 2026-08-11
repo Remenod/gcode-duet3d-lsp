@@ -37,6 +37,8 @@ import {
   CodeActionParams,
   ExecuteCommandParams,
   DidChangeConfigurationNotification,
+  DidChangeWatchedFilesParams,
+  FileChangeType,
 } from 'vscode-languageserver/node';
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -105,7 +107,14 @@ const operatorsData: DocDB = loadJson('../data/gcode-operators.json', 'operators
 const functionsData: DocDB = loadJson('../data/gcode-functions.json', 'functions dictionary');
 
 // ── File detection ─────────────────────────────────────────────────────────────
-const RRF_EXTENSIONS = new Set(['.g', '.G', '.gcode', '.macro', '.cfg']);
+//
+// Compared case-insensitively (extensions are lower-cased before lookup) and
+// aligned with the language registration in package.json (.g/.gcode/.gc/.gco).
+const RRF_EXTENSIONS = new Set(['.g', '.gcode', '.gc', '.gco', '.macro', '.cfg']);
+
+// Extensions that other ecosystems use too (e.g. Klipper's printer.cfg), so a
+// file only counts as RRF G-code when its content also looks like it.
+const SNIFFED_EXTENSIONS = new Set(['.cfg', '.macro']);
 
 /**
  * Returns true if `text` looks like RRF G-code / meta-command content.
@@ -189,6 +198,11 @@ connection.onInitialized(async () => {
     // defaults — that's fine, validators still run.
   }
 
+  // Load user settings BEFORE the background scan, otherwise diagnostics for
+  // up to MAX_BACKGROUND_DIAGNOSTICS closed files are computed from defaults
+  // and contradict the user's configuration until each file is reopened.
+  await refreshConfig();
+
   try {
     const folders = await connection.workspace.getWorkspaceFolders();
     if (folders) {
@@ -247,6 +261,17 @@ connection.onDidChangeConfiguration(async () => {
   for (const doc of documents.all()) {
     publishDiagnostics(doc);
   }
+  // Closed files that got diagnostics from the background scan (or after
+  // being closed) must be recomputed too, otherwise the Problems panel keeps
+  // entries produced with the old settings until each file is reopened.
+  for (const uri of backgroundDiagnosticUris) {
+    if (documents.get(uri)) continue;
+    try {
+      publishDiagnosticsForText(uri, fs.readFileSync(URI.parse(uri).fsPath, 'utf8'));
+    } catch {
+      connection.sendDiagnostics({ uri, diagnostics: [] });
+    }
+  }
 });
 
 // ── Workspace directory scanner ────────────────────────────────────────────────
@@ -263,6 +288,11 @@ connection.onDidChangeConfiguration(async () => {
 const MAX_BACKGROUND_DIAGNOSTICS = 1000;
 let backgroundDiagnosticsPublished = 0;
 
+// URIs of non-open files whose diagnostics we have published (background scan,
+// closed documents, watched-file events).  Config changes re-publish these so
+// their diagnostics never go stale relative to the user's settings.
+const backgroundDiagnosticUris = new Set<string>();
+
 /** Collect all RRF files under `dir` that are not already open. */
 function collectRrfFiles(dir: string): Array<{ uri: string; content: string }> {
   const results: Array<{ uri: string; content: string }> = [];
@@ -278,12 +308,11 @@ function collectRrfFiles(dir: string): Array<{ uri: string; content: string }> {
       continue;
     }
 
-    const ext = path.extname(entry.name);
-    const hasRrfExt = RRF_EXTENSIONS.has(ext);
+    const ext = path.extname(entry.name).toLowerCase();
     const noExt = ext === '';
 
     // Skip files with non-RRF extensions
-    if (!hasRrfExt && !noExt) continue;
+    if (!noExt && !RRF_EXTENSIONS.has(ext)) continue;
 
     const fileUri = URI.file(fullPath).toString();
 
@@ -298,8 +327,9 @@ function collectRrfFiles(dir: string): Array<{ uri: string; content: string }> {
       continue;
     }
 
-    // For extensionless files, apply content sniffing before indexing.
-    if (noExt && !looksLikeGCode(content)) continue;
+    // Extensionless and shared-extension files (.cfg/.macro) must also LOOK
+    // like RRF G-code, so e.g. a Klipper printer.cfg is not indexed.
+    if ((noExt || SNIFFED_EXTENSIONS.has(ext)) && !looksLikeGCode(content)) continue;
 
     results.push({ uri: fileUri, content });
   }
@@ -318,6 +348,7 @@ function scanDirectoryForGlobals(dir: string): void {
   for (const { uri, content } of files) {
     if (backgroundDiagnosticsPublished >= MAX_BACKGROUND_DIAGNOSTICS) break;
     backgroundDiagnosticsPublished++;
+    backgroundDiagnosticUris.add(uri);
     publishDiagnosticsForText(uri, content);
   }
 }
@@ -333,6 +364,7 @@ documents.onDidClose((e: TextDocumentChangeEvent<TextDocument>) => {
       symbolTable.indexDocument(e.document.uri, text);
       // Re-publish diagnostics from the saved file so the Problems panel stays
       // accurate even after the editor tab is closed.
+      backgroundDiagnosticUris.add(e.document.uri);
       publishDiagnosticsForText(e.document.uri, text);
     } else {
       symbolTable.removeDocument(e.document.uri);
@@ -341,6 +373,50 @@ documents.onDidClose((e: TextDocumentChangeEvent<TextDocument>) => {
   } catch {
     symbolTable.removeDocument(e.document.uri);
   }
+});
+
+// ── Watched-file events ───────────────────────────────────────────────────────
+//
+// The client watches workspace RRF files (see synchronize.fileEvents in
+// client/src/extension.ts).  Reacting here keeps three things fresh without a
+// server restart:
+//   • the symbol table / diagnostics for files edited outside VS Code,
+//   • path-existence diagnostics in open documents (a referenced file may have
+//     just been created or deleted),
+//   • the per-document SD-root cache — e.g. sys/config.g appearing for the
+//     first time turns a plain folder into a detectable SD-card mirror.
+connection.onDidChangeWatchedFiles((params: DidChangeWatchedFilesParams) => {
+  for (const change of params.changes) {
+    const uri = change.uri;
+    // Open documents are authoritative; their buffer already drives the index.
+    if (documents.get(uri)) continue;
+
+    if (change.type === FileChangeType.Deleted) {
+      symbolTable.removeDocument(uri);
+      backgroundDiagnosticUris.delete(uri);
+      connection.sendDiagnostics({ uri, diagnostics: [] });
+      continue;
+    }
+
+    // Created / Changed: (re-)index from disk, with the same content sniffing
+    // as the startup scan for shared extensions.
+    try {
+      const fsPath = URI.parse(uri).fsPath;
+      const ext = path.extname(fsPath).toLowerCase();
+      const content = fs.readFileSync(fsPath, 'utf8');
+      if ((ext === '' || SNIFFED_EXTENSIONS.has(ext)) && !looksLikeGCode(content)) continue;
+      symbolTable.indexDocument(uri, content);
+      backgroundDiagnosticUris.add(uri);
+      publishDiagnosticsForText(uri, content);
+    } catch { /* unreadable — skip */ }
+  }
+
+  // Any file event can change SD-root detection; the cache repopulates lazily.
+  invalidateSdRootCache();
+
+  // Path-existence warnings in open documents may refer to the files that just
+  // changed, so refresh what the user is looking at.
+  for (const doc of documents.all()) publishDiagnostics(doc);
 });
 
 function onDocumentChange(doc: TextDocument): void {
