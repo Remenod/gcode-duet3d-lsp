@@ -1,6 +1,7 @@
 // parser/expression.ts
 
 import { Token, TokenType } from './types';
+import { Lexer } from './lexer';
 import { lineIndent } from '../analysis/utils';
 
 export interface ParseError {
@@ -912,15 +913,20 @@ export function validateLine(
       return errors;
     }
 
-    // Undefined var → hard error
+    // Undefined var → hard error (or dead-code warning under an exists() guard)
     if (val.startsWith('var.') && ctx) {
       const varName = val.slice(4).split('[')[0];
       if (!ctx.symbolTable.lookupVarAtLine(varName, ctx.uri, ctx.line, ctx.indent, ctx.docLines)) {
-        errors.push({
-          severity: 'error',
-          message: `undefined variable 'var.${varName}' — declare it with 'var ${varName} = ...' first`,
-          ...span(targetTok),
-        });
+        const qualified = `var.${varName}`;
+        if (isExistsGuarded(tokens, targetTok, qualified, ctx)) {
+          errors.push(existsGuardedWarning(qualified, targetTok));
+        } else {
+          errors.push({
+            severity: 'error',
+            message: `undefined variable 'var.${varName}' — declare it with 'var ${varName} = ...' first`,
+            ...span(targetTok),
+          });
+        }
       }
     }
 
@@ -1179,6 +1185,85 @@ function checkBareIdentifiers(tokens: Token[], ctx: DiagnosticContext): ParseErr
 //   exists(var.foo)      ← do NOT report error even if var.foo is undeclared
 //   echo {var.foo}       ← DO report error if var.foo is undeclared
 
+// ── exists()-guard detection ─────────────────────────────────────────────────
+//
+// `if exists(var.x)` followed by uses of var.x inside the guarded block is a
+// deliberate defensive pattern: when the variable is not in scope the guard is
+// false and the block is simply skipped, so the firmware never raises an
+// error.  Such uses are therefore reported as a WARNING about code that will
+// never run, not as an undefined-variable error.
+//
+// Rules:
+//   • Only an UN-negated exists(var.x) counts — inside `if !exists(var.x)` the
+//     variable is guaranteed NOT to exist, so the hard error stays.
+//   • The guard applies to the block owned by its own if/elif/while header;
+//     an `else` branch of `if exists(var.x)` gets no guard (quite the
+//     opposite), and the walk below never attributes an if-condition to its
+//     elif/else siblings.
+//   • A guard earlier on the SAME line also counts (ternary and compound
+//     conditions like `exists(var.x) && var.x > 5`) — RRF's expression parser
+//     threads an "evaluate" flag through ?:/&&/|| so the right-hand side of a
+//     false guard is parsed but not evaluated.
+
+/** True when `tokens` contain an un-negated `exists(<qualified>)` call (before column `before`, if given). */
+function tokensContainExistsGuard(tokens: Token[], qualified: string, before?: number): boolean {
+    for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        if (t.type !== TokenType.FunctionName || t.value.toLowerCase() !== 'exists') continue;
+        if (before !== undefined && t.start >= before) break;
+        if (i > 0 && tokens[i - 1].type === TokenType.Not) continue;
+        let j = i + 1;
+        if (tokens[j]?.type !== TokenType.LParen) continue;
+        j++;
+        if (tokens[j]?.type === TokenType.Hash) j++;
+        const arg = tokens[j];
+        if (arg?.type === TokenType.Identifier && arg.value === qualified) return true;
+    }
+    return false;
+}
+
+/**
+ * True when the use of `qualified` at token `usage` is dominated by an
+ * un-negated `exists(<qualified>)` guard: earlier on the same line, or in the
+ * condition of an enclosing if/elif/while block.
+ */
+function isExistsGuarded(
+    tokens: Token[],
+    usage: Token,
+    qualified: string,
+    ctx: DiagnosticContext,
+): boolean {
+    if (tokensContainExistsGuard(tokens, qualified, usage.start)) return true;
+    if (!ctx.docLines) return false;
+
+    let cur = ctx.indent;
+    for (let l = ctx.line - 1; l >= 0 && cur > 0; l--) {
+        const text = ctx.docLines[l];
+        if (text === undefined || isBlankOrComment(text)) continue;
+        const ind = lineIndent(text);
+        if (ind >= cur) continue;
+        // `l` is the header of the block enclosing the usage.
+        if (/^(if|elif|while)\b/i.test(text.trim())) {
+            const headerTokens = new Lexer(text, l).tokenize();
+            if (tokensContainExistsGuard(headerTokens, qualified)) return true;
+        }
+        cur = ind;
+    }
+    return false;
+}
+
+/** Warning used instead of the undefined-variable error under an exists() guard. */
+function existsGuardedWarning(qualified: string, tok: Token): ParseError {
+    return {
+        severity: 'warning',
+        message:
+            `'${qualified}' is never in scope here, so the exists() guard is always false ` +
+            `and this code will never run — locals are not visible in called macros; ` +
+            `pass values with M98 parameters (param.X) or use a global variable`,
+        ...span(tok),
+    };
+}
+
 /**
  * Returns true when tokens[idx] is the identifier argument to `exists(...)`.
  *
@@ -1265,11 +1350,16 @@ function checkDeclaredVars(
       if (isInsideExistsArg(tokens, i)) continue;
       const name = v.slice(4).split('[')[0];
       if (!ctx.symbolTable.lookupVarAtLine(name, ctx.uri, ctx.line, ctx.indent, ctx.docLines, strictBefore)) {
-        errors.push({
-          severity: 'error',
-          message: `undefined variable '${v}' — declare it with 'var ${name} = ...' first`,
-          ...span(t),
-        });
+        const qualified = `var.${name}`;
+        if (isExistsGuarded(tokens, t, qualified, ctx)) {
+          errors.push(existsGuardedWarning(qualified, t));
+        } else {
+          errors.push({
+            severity: 'error',
+            message: `undefined variable '${v}' — declare it with 'var ${name} = ...' first`,
+            ...span(t),
+          });
+        }
       }
     } else if (v.startsWith('global.')) {
       // Exempt: direct argument to exists()
