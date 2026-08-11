@@ -13,7 +13,14 @@ export interface ParseError {
 
 export interface DiagnosticContext {
   symbolTable: {
-    lookupVarAtLine(name: string, uri: string, refLine: number, refIndent: number): unknown | undefined;
+    lookupVarAtLine(
+      name: string,
+      uri: string,
+      refLine: number,
+      refIndent: number,
+      docLines?: string[],
+      strictBefore?: boolean,
+    ): unknown | undefined;
     lookupGlobal(name: string): unknown | undefined;
     getAllDeclsForName(name: string, uri: string): Array<{ indent: number; line: number }>;
     getAllGlobalDecls(name: string): Array<{ uri: string; line: number }>;
@@ -797,7 +804,9 @@ export function validateLine(
 
     errors.push(...new ExpressionValidator(exprTokens).validateFull());
     if (ctx?.isValidOmPath) errors.push(...checkBareIdentifiers(exprTokens, ctx));
-    if (ctx) errors.push(...checkDeclaredVars(exprTokens, ctx));
+    // strictBefore: the variable being declared does not exist while its own
+    // initializer is evaluated, so `var x = var.x` must be an error.
+    if (ctx) errors.push(...checkDeclaredVars(exprTokens, ctx, /*strictBefore*/ true));
     return errors;
   }
 
@@ -906,7 +915,7 @@ export function validateLine(
     // Undefined var → hard error
     if (val.startsWith('var.') && ctx) {
       const varName = val.slice(4).split('[')[0];
-      if (!ctx.symbolTable.lookupVarAtLine(varName, ctx.uri, ctx.line, ctx.indent)) {
+      if (!ctx.symbolTable.lookupVarAtLine(varName, ctx.uri, ctx.line, ctx.indent, ctx.docLines)) {
         errors.push({
           severity: 'error',
           message: `undefined variable 'var.${varName}' — declare it with 'var ${varName} = ...' first`,
@@ -1240,7 +1249,11 @@ function checkDuplicateGCodeParams(tokens: Token[]): ParseError[] {
 }
 
 
-function checkDeclaredVars(tokens: Token[], ctx: DiagnosticContext): ParseError[] {
+function checkDeclaredVars(
+  tokens: Token[],
+  ctx: DiagnosticContext,
+  strictBefore = false,
+): ParseError[] {
   const errors: ParseError[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
@@ -1251,7 +1264,7 @@ function checkDeclaredVars(tokens: Token[], ctx: DiagnosticContext): ParseError[
       // Exempt: direct argument to exists()
       if (isInsideExistsArg(tokens, i)) continue;
       const name = v.slice(4).split('[')[0];
-      if (!ctx.symbolTable.lookupVarAtLine(name, ctx.uri, ctx.line, ctx.indent)) {
+      if (!ctx.symbolTable.lookupVarAtLine(name, ctx.uri, ctx.line, ctx.indent, ctx.docLines, strictBefore)) {
         errors.push({
           severity: 'error',
           message: `undefined variable '${v}' — declare it with 'var ${name} = ...' first`,

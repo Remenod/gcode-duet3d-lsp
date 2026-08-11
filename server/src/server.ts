@@ -717,7 +717,7 @@ connection.onDefinition((params: DefinitionParams): Location | null => {
   let decl: { uri: string; line: number; col: number } | undefined;
 
   if (val.startsWith('var.'))
-    decl = symbolTable.lookupVarAtLine(val.slice(4), params.textDocument.uri, params.position.line, indent) ?? undefined;
+    decl = symbolTable.lookupVarAtLine(val.slice(4), params.textDocument.uri, params.position.line, indent, lines) ?? undefined;
   else if (val.startsWith('global.'))
     decl = symbolTable.lookupGlobal(val.slice(7)) ?? undefined;
   // param.x: no go-to-definition — the value comes from the G-code word at the
