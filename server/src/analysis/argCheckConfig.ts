@@ -98,10 +98,13 @@ function globToRegExp(glob: string): RegExp {
             re += '[^/]';
             i++;
         } else if (c === '{') {
-            // `{a,b,c}` → `(a|b|c)` (no nesting support)
+            // `{a,b,c}` → `(a|b|c)` (no nesting support).  Each alternative is
+            // translated with the same wildcard rules as the top level, so
+            // patterns like `{test*,tmp?}.g` keep their glob meaning instead of
+            // leaking `*`/`?` into the regex as quantifiers.
             const end = glob.indexOf('}', i);
             if (end === -1) { re += '\\{'; i++; continue; }
-            const parts = glob.slice(i + 1, end).split(',').map(escapeRe);
+            const parts = glob.slice(i + 1, end).split(',').map(globPartToRegExp);
             re += '(' + parts.join('|') + ')';
             i = end + 1;
         } else if (c === '[') {
@@ -122,6 +125,33 @@ function globToRegExp(glob: string): RegExp {
 
 function escapeRe(s: string): string {
     return s.replace(/[.+^$()|\\]/g, '\\$&');
+}
+
+// Translate one `{…}` alternative: wildcards keep their glob meaning,
+// everything else is escaped literally.
+function globPartToRegExp(part: string): string {
+    let re = '';
+    let i = 0;
+    while (i < part.length) {
+        const c = part[i];
+        if (c === '*') {
+            if (part[i + 1] === '*') {
+                re += '.*';
+                i += 2;
+                if (part[i] === '/') i++;
+            } else {
+                re += '[^/]*';
+                i++;
+            }
+        } else if (c === '?') {
+            re += '[^/]';
+            i++;
+        } else {
+            re += escapeRe(c);
+            i++;
+        }
+    }
+    return re;
 }
 
 /**
