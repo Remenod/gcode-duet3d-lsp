@@ -682,50 +682,64 @@ connection.onCodeAction((params: CodeActionParams): CodeAction[] => {
 // diagnostic disappears immediately, then trust the follow-up
 // `workspace/didChangeConfiguration` to reconcile.
 connection.onExecuteCommand(async (params: ExecuteCommandParams) => {
-  if (params.command !== CMD_ADD_PATH_IGNORE) return;
-  const pattern = params.arguments?.[0];
-  if (typeof pattern !== 'string' || pattern.length === 0) return;
+  if (params.command === CMD_ADD_PATH_IGNORE) {
+    const pattern = params.arguments?.[0];
+    if (typeof pattern !== 'string' || pattern.length === 0) return;
 
-  await refreshConfig();
-  const next = Array.from(new Set([...argCheckConfig.paths.ignore, pattern]));
+    await refreshConfig();
+    const next = Array.from(new Set([...argCheckConfig.paths.ignore, pattern]));
 
-  // Optimistic local update — diagnostic vanishes right away.
-  argCheckConfig = {
-    ...argCheckConfig,
-    paths: { ...argCheckConfig.paths, ignore: next },
-  };
-  for (const doc of documents.all()) publishDiagnostics(doc);
+    // Optimistic local update — diagnostic vanishes right away.
+    argCheckConfig = {
+      ...argCheckConfig,
+      paths: { ...argCheckConfig.paths, ignore: next },
+    };
+    for (const doc of documents.all()) publishDiagnostics(doc);
 
-  // Best-effort server-side persistence — only used by clients that don't
-  // override the command themselves.
-  try {
-    await persistIgnoresToWorkspaceSettings(next);
-  } catch (e) {
-    connection.console.warn(`RRF LSP: could not persist ignore pattern: ${e}`);
+    // Best-effort server-side persistence — only used by clients that don't
+    // override the command themselves.
+    try {
+      await persistWorkspaceSetting('rrfgcode.argCheck.paths.ignore', next);
+    } catch (e) {
+      connection.console.warn(`RRF LSP: could not persist ignore pattern: ${e}`);
+    }
+    return;
+  }
+
+  if (params.command === CMD_SET_MAX_LINE_LENGTH) {
+    const value = params.arguments?.[0];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return;
+
+    // Optimistic local update, mirroring CMD_ADD_PATH_IGNORE above.
+    maxLineLength = Math.floor(value);
+    for (const doc of documents.all()) publishDiagnostics(doc);
+
+    try {
+      await persistWorkspaceSetting('rrfgcode.maxLineLength', maxLineLength);
+    } catch (e) {
+      connection.console.warn(`RRF LSP: could not persist maxLineLength: ${e}`);
+    }
+    return;
   }
 });
 
 /**
- * Write `ignore` array into `<workspace>/.vscode/settings.json`.
+ * Write one setting into `<workspace>/.vscode/settings.json`.
  *
- * This is the **fallback path** for clients that don't intercept the
- * `rrfgcode.addPathIgnore` command client-side.  A VS Code extension SHOULD
- * intercept it and call:
- *
- *     vscode.workspace.getConfiguration('rrfgcode.argCheck.paths')
- *         .update('ignore', newIgnores, ConfigurationTarget.Workspace)
- *
- * That route goes through VS Code's settings API, which knows how to merge
- * with JSONC-style comments, preserve formatting, etc.  When the extension
- * does intercept, this server-side function is never invoked.
+ * This is the **fallback path** for clients that don't intercept the quick-fix
+ * commands client-side.  A VS Code extension SHOULD intercept them and call
+ * `vscode.workspace.getConfiguration(...).update(...)` — that route goes
+ * through VS Code's settings API, which knows how to merge with JSONC-style
+ * comments, preserve formatting, etc.  When the extension does intercept,
+ * this server-side function is never invoked.
  *
  * Because we cannot safely merge with an existing JSONC settings.json from
  * here (rewriting would clobber comments and surrounding keys), we only
  * write when the file does NOT yet exist — that way no user data is at
- * risk.  When the file does exist, we log a hint and rely on the user to
- * either install the extension or edit settings.json manually.
+ * risk.  When the file does exist, we tell the user so the in-memory change
+ * is not silently lost on the next configuration reload.
  */
-async function persistIgnoresToWorkspaceSettings(ignore: string[]): Promise<void> {
+async function persistWorkspaceSetting(key: string, value: unknown): Promise<void> {
   const folders = await connection.workspace.getWorkspaceFolders();
   if (!folders || folders.length === 0) return;
 
@@ -734,11 +748,12 @@ async function persistIgnoresToWorkspaceSettings(ignore: string[]): Promise<void
   const settingsPath = path.join(dotVscode, 'settings.json');
 
   if (fs.existsSync(settingsPath)) {
-    connection.console.info(
-      'RRF LSP: `.vscode/settings.json` already exists — not auto-editing to ' +
-      'avoid clobbering comments. Add the ignore pattern manually, or update ' +
-      'the language-client extension to intercept the rrfgcode.addPathIgnore ' +
-      'command client-side.',
+    // Surface the skip to the user: the optimistic in-memory update is
+    // discarded by the next refreshConfig(), so a console-only hint would
+    // make the quick fix appear to silently stop working.
+    connection.window.showWarningMessage(
+      `RRF G-code: could not update .vscode/settings.json automatically — ` +
+      `add "${key}": ${JSON.stringify(value)} to it manually to keep this quick fix.`,
     );
     return;
   }
@@ -746,7 +761,7 @@ async function persistIgnoresToWorkspaceSettings(ignore: string[]): Promise<void
   // Safe to create from scratch.
   try {
     if (!fs.existsSync(dotVscode)) fs.mkdirSync(dotVscode, { recursive: true });
-    const obj = { 'rrfgcode.argCheck.paths.ignore': ignore };
+    const obj = { [key]: value };
     fs.writeFileSync(settingsPath, JSON.stringify(obj, null, 4) + '\n', 'utf8');
     connection.console.info(`RRF LSP: wrote ${settingsPath}`);
   } catch (e) {
