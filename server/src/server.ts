@@ -45,6 +45,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import * as fs from 'fs';
 import * as path from 'path';
 import { URI } from 'vscode-uri';
+import * as jsonc from 'jsonc-parser';
 
 import { Lexer } from './parser/lexer';
 import {
@@ -805,16 +806,15 @@ connection.onExecuteCommand(async (params: ExecuteCommandParams) => {
  *
  * This is the **fallback path** for clients that don't intercept the quick-fix
  * commands client-side.  A VS Code extension SHOULD intercept them and call
- * `vscode.workspace.getConfiguration(...).update(...)` — that route goes
- * through VS Code's settings API, which knows how to merge with JSONC-style
- * comments, preserve formatting, etc.  When the extension does intercept,
- * this server-side function is never invoked.
+ * `vscode.workspace.getConfiguration(...).update(...)`; when it does, this
+ * server-side function is never invoked.
  *
- * Because we cannot safely merge with an existing JSONC settings.json from
- * here (rewriting would clobber comments and surrounding keys), we only
- * write when the file does NOT yet exist — that way no user data is at
- * risk.  When the file does exist, we tell the user so the in-memory change
- * is not silently lost on the next configuration reload.
+ * An existing settings.json is edited surgically with jsonc-parser (the same
+ * library VS Code itself uses), so comments, formatting and unrelated keys
+ * survive.  Settings files may spell the key flat ("a.b.c") or nested
+ * ("a.b": { "c": … }) — the existing spelling is detected and reused.  Only
+ * when the file cannot be parsed do we refuse and tell the user, so the
+ * optimistic in-memory change is never silently lost.
  */
 async function persistWorkspaceSetting(key: string, value: unknown): Promise<void> {
   const folders = await connection.workspace.getWorkspaceFolders();
@@ -824,26 +824,75 @@ async function persistWorkspaceSetting(key: string, value: unknown): Promise<voi
   const dotVscode = path.join(root, '.vscode');
   const settingsPath = path.join(dotVscode, 'settings.json');
 
-  if (fs.existsSync(settingsPath)) {
-    // Surface the skip to the user: the optimistic in-memory update is
-    // discarded by the next refreshConfig(), so a console-only hint would
-    // make the quick fix appear to silently stop working.
-    connection.window.showWarningMessage(
-      `RRF G-code: could not update .vscode/settings.json automatically — ` +
-      `add "${key}": ${JSON.stringify(value)} to it manually to keep this quick fix.`,
-    );
-    return;
-  }
+  const warnManualEdit = () => connection.window.showWarningMessage(
+    `RRF G-code: could not update .vscode/settings.json automatically — ` +
+    `add "${key}": ${JSON.stringify(value)} to it manually to keep this quick fix.`,
+  );
 
-  // Safe to create from scratch.
   try {
-    if (!fs.existsSync(dotVscode)) fs.mkdirSync(dotVscode, { recursive: true });
-    const obj = { [key]: value };
-    fs.writeFileSync(settingsPath, JSON.stringify(obj, null, 4) + '\n', 'utf8');
-    connection.console.info(`RRF LSP: wrote ${settingsPath}`);
+    if (!fs.existsSync(settingsPath)) {
+      if (!fs.existsSync(dotVscode)) fs.mkdirSync(dotVscode, { recursive: true });
+      const obj = { [key]: value };
+      fs.writeFileSync(settingsPath, JSON.stringify(obj, null, 4) + '\n', 'utf8');
+      connection.console.info(`RRF LSP: wrote ${settingsPath}`);
+      return;
+    }
+
+    const text = fs.readFileSync(settingsPath, 'utf8');
+    const parseErrors: jsonc.ParseError[] = [];
+    const parsed = jsonc.parse(text, parseErrors, { allowTrailingComma: true });
+    if (parseErrors.length > 0 || typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      warnManualEdit();
+      return;
+    }
+
+    const edits = jsonc.modify(text, settingJsonPath(parsed, key), value, {
+      formattingOptions: { insertSpaces: true, tabSize: 4, eol: '\n' },
+    });
+    fs.writeFileSync(settingsPath, jsonc.applyEdits(text, edits), 'utf8');
+    connection.console.info(`RRF LSP: updated ${settingsPath}`);
   } catch (e) {
     connection.console.warn(`RRF LSP: failed to write settings.json: ${e}`);
+    warnManualEdit();
   }
+}
+
+/**
+ * Find the JSON path under which a dotted setting key should be written in
+ * this particular settings object.  VS Code accepts both the flat spelling
+ * ("rrfgcode.argCheck.paths.ignore": …) and partially nested ones
+ * ("rrfgcode.argCheck": { "paths": { "ignore": … } }); writing a second
+ * spelling alongside an existing one would leave two competing entries, so
+ * the file's current shape wins.  Falls back to the flat key.
+ */
+function settingJsonPath(parsed: Record<string, unknown>, key: string): jsonc.JSONPath {
+  const segments = key.split('.');
+
+  const isObj = (v: unknown): v is Record<string, unknown> =>
+    typeof v === 'object' && v !== null && !Array.isArray(v);
+
+  // Prefer a spelling whose leaf already exists.
+  for (let i = segments.length; i >= 1; i--) {
+    const head = segments.slice(0, i).join('.');
+    if (!(head in parsed)) continue;
+    let node: unknown = parsed[head];
+    let ok = true;
+    for (const seg of segments.slice(i)) {
+      if (isObj(node) && seg in node) node = node[seg];
+      else { ok = false; break; }
+    }
+    if (ok) return [head, ...segments.slice(i)];
+  }
+
+  // Otherwise nest under the deepest existing prefix object.
+  for (let i = segments.length - 1; i >= 1; i--) {
+    const head = segments.slice(0, i).join('.');
+    if (head in parsed && isObj(parsed[head])) {
+      return [head, ...segments.slice(i)];
+    }
+  }
+
+  return [key];
 }
 
 // ── Completions ───────────────────────────────────────────────────────────────
