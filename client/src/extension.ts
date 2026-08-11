@@ -30,9 +30,25 @@ function configTarget(): ConfigurationTarget {
 async function addPathIgnore(pattern: unknown): Promise<void> {
   if (typeof pattern !== "string" || pattern.length === 0) return;
   const cfg = workspace.getConfiguration("rrfgcode.argCheck.paths");
-  const current = cfg.get<string[]>("ignore", []);
+  const inspected = cfg.inspect<string[]>("ignore");
+
+  // Append to the list in the scope that currently owns it.  Writing the
+  // merged/effective list into the workspace would copy a user-level list
+  // into .vscode/settings.json and permanently shadow later user-level edits.
+  let target = configTarget();
+  if (
+    target === ConfigurationTarget.Workspace &&
+    inspected?.workspaceValue === undefined &&
+    inspected?.globalValue !== undefined
+  ) {
+    target = ConfigurationTarget.Global;
+  }
+
+  const current = (target === ConfigurationTarget.Workspace
+    ? inspected?.workspaceValue
+    : inspected?.globalValue) ?? [];
   if (current.includes(pattern)) return;
-  await cfg.update("ignore", [...current, pattern], configTarget());
+  await cfg.update("ignore", [...current, pattern], target);
 }
 
 /** Set `rrfgcode.maxLineLength` (0 disables the line-length check). */

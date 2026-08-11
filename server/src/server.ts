@@ -208,10 +208,13 @@ connection.onInitialized(async () => {
 // didChangeConfiguration; we then re-publish diagnostics for every open
 // document.
 
-// Maximum G-code line length before a diagnostic is raised.  RepRapFirmware's
-// input buffer is limited, so overly long lines can be rejected by the printer.
+// Maximum G-code command length (in UTF-8 bytes) before a diagnostic is raised.
+// RepRapFirmware's input buffer (MaxGCodeLength = 256, including the null
+// terminator) holds at most 255 command bytes; longer commands fail with
+// "GCode command too long".  Only the command part counts: leading whitespace,
+// N line numbers, *checksums and ;-comments are never stored by the firmware.
 // A value of 0 disables the check.
-const DEFAULT_MAX_LINE_LENGTH = 256;
+const DEFAULT_MAX_LINE_LENGTH = 255;
 
 let argCheckConfig: ArgCheckConfig = defaultArgCheckConfig();
 let maxLineLength = DEFAULT_MAX_LINE_LENGTH;
@@ -381,6 +384,42 @@ function getAllDocTexts(): Map<string, string> {
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 
+interface CommandPart { text: string; start: number; end: number }
+
+/**
+ * Extract the part of a line that actually lands in the firmware's G-code
+ * buffer: strips leading whitespace, an `N<digits>` line number, a trailing
+ * `*<digits>` checksum and everything from an unquoted `;` on.  Returns null
+ * for blank and comment-only lines.
+ */
+function commandPartOfLine(lineText: string): CommandPart | null {
+  // Comment start: the first ';' outside a "…" string.  A doubled "" escape
+  // toggles the string state twice, so the tracking stays correct.
+  let inString = false;
+  let end = lineText.length;
+  for (let i = 0; i < lineText.length; i++) {
+    const c = lineText[i];
+    if (c === '"') inString = !inString;
+    else if (c === ';' && !inString) { end = i; break; }
+  }
+
+  let start = 0;
+  while (start < end && (lineText[start] === ' ' || lineText[start] === '\t')) start++;
+
+  const lineNumber = /^[Nn]\d+[ \t]*/.exec(lineText.slice(start, end));
+  if (lineNumber) start += lineNumber[0].length;
+
+  while (end > start && (lineText[end - 1] === ' ' || lineText[end - 1] === '\t')) end--;
+  const checksum = /\*\d+$/.exec(lineText.slice(start, end));
+  if (checksum) {
+    end -= checksum[0].length;
+    while (end > start && (lineText[end - 1] === ' ' || lineText[end - 1] === '\t')) end--;
+  }
+
+  if (end <= start) return null;
+  return { text: lineText.slice(start, end), start, end };
+}
+
 /** Publish diagnostics for an open TextDocument. */
 function publishDiagnostics(doc: TextDocument): void {
   publishDiagnosticsForText(doc.uri, doc.getText());
@@ -406,20 +445,34 @@ function publishDiagnosticsForText(uri: string, text: string): void {
     const lineText = lines[i];
 
     // Line-length check runs before tokenization so it is reported even for
-    // lines that also contain lexer errors.  RepRapFirmware's G-code input
-    // buffer is limited; lines longer than the configured maximum can be
-    // rejected by the firmware.
-    if (maxLineLength > 0 && lineText.length > maxLineLength) {
-      diagnostics.push({
-        severity: DiagnosticSeverity.Error,
-        range: mkRange(i, maxLineLength, i, lineText.length),
-        message:
-          `Line is ${lineText.length} characters long; RepRapFirmware limits G-code ` +
-          `lines to ${maxLineLength} characters and may reject longer ones.`,
-        source: 'rrf-gcode',
-        code: LINE_TOO_LONG_CODE,
-        data: { length: lineText.length, max: maxLineLength },
-      });
+    // lines that also contain lexer errors.  Only the command part is measured
+    // (in UTF-8 bytes, matching the firmware buffer) — comments, indentation,
+    // N line numbers and *checksums are excluded because the firmware never
+    // stores them.
+    if (maxLineLength > 0) {
+      const part = commandPartOfLine(lineText);
+      const bytes = part ? Buffer.byteLength(part.text, 'utf8') : 0;
+      if (part && bytes > maxLineLength) {
+        // Column where the byte budget runs out (the range is expressed in
+        // UTF-16 columns even though the limit is measured in UTF-8 bytes).
+        let overflowCol = part.start;
+        let used = 0;
+        for (const ch of part.text) {
+          used += Buffer.byteLength(ch, 'utf8');
+          if (used > maxLineLength) break;
+          overflowCol += ch.length;
+        }
+        diagnostics.push({
+          severity: DiagnosticSeverity.Error,
+          range: mkRange(i, overflowCol, i, part.end),
+          message:
+            `Command is ${bytes} bytes long, exceeding rrfgcode.maxLineLength (${maxLineLength}). ` +
+            `RepRapFirmware rejects commands longer than its input buffer with "GCode command too long".`,
+          source: 'rrf-gcode',
+          code: LINE_TOO_LONG_CODE,
+          data: { length: bytes, max: maxLineLength },
+        });
+      }
     }
 
     const indent = lineIndent(lineText);
@@ -629,50 +682,64 @@ connection.onCodeAction((params: CodeActionParams): CodeAction[] => {
 // diagnostic disappears immediately, then trust the follow-up
 // `workspace/didChangeConfiguration` to reconcile.
 connection.onExecuteCommand(async (params: ExecuteCommandParams) => {
-  if (params.command !== CMD_ADD_PATH_IGNORE) return;
-  const pattern = params.arguments?.[0];
-  if (typeof pattern !== 'string' || pattern.length === 0) return;
+  if (params.command === CMD_ADD_PATH_IGNORE) {
+    const pattern = params.arguments?.[0];
+    if (typeof pattern !== 'string' || pattern.length === 0) return;
 
-  await refreshConfig();
-  const next = Array.from(new Set([...argCheckConfig.paths.ignore, pattern]));
+    await refreshConfig();
+    const next = Array.from(new Set([...argCheckConfig.paths.ignore, pattern]));
 
-  // Optimistic local update — diagnostic vanishes right away.
-  argCheckConfig = {
-    ...argCheckConfig,
-    paths: { ...argCheckConfig.paths, ignore: next },
-  };
-  for (const doc of documents.all()) publishDiagnostics(doc);
+    // Optimistic local update — diagnostic vanishes right away.
+    argCheckConfig = {
+      ...argCheckConfig,
+      paths: { ...argCheckConfig.paths, ignore: next },
+    };
+    for (const doc of documents.all()) publishDiagnostics(doc);
 
-  // Best-effort server-side persistence — only used by clients that don't
-  // override the command themselves.
-  try {
-    await persistIgnoresToWorkspaceSettings(next);
-  } catch (e) {
-    connection.console.warn(`RRF LSP: could not persist ignore pattern: ${e}`);
+    // Best-effort server-side persistence — only used by clients that don't
+    // override the command themselves.
+    try {
+      await persistWorkspaceSetting('rrfgcode.argCheck.paths.ignore', next);
+    } catch (e) {
+      connection.console.warn(`RRF LSP: could not persist ignore pattern: ${e}`);
+    }
+    return;
+  }
+
+  if (params.command === CMD_SET_MAX_LINE_LENGTH) {
+    const value = params.arguments?.[0];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return;
+
+    // Optimistic local update, mirroring CMD_ADD_PATH_IGNORE above.
+    maxLineLength = Math.floor(value);
+    for (const doc of documents.all()) publishDiagnostics(doc);
+
+    try {
+      await persistWorkspaceSetting('rrfgcode.maxLineLength', maxLineLength);
+    } catch (e) {
+      connection.console.warn(`RRF LSP: could not persist maxLineLength: ${e}`);
+    }
+    return;
   }
 });
 
 /**
- * Write `ignore` array into `<workspace>/.vscode/settings.json`.
+ * Write one setting into `<workspace>/.vscode/settings.json`.
  *
- * This is the **fallback path** for clients that don't intercept the
- * `rrfgcode.addPathIgnore` command client-side.  A VS Code extension SHOULD
- * intercept it and call:
- *
- *     vscode.workspace.getConfiguration('rrfgcode.argCheck.paths')
- *         .update('ignore', newIgnores, ConfigurationTarget.Workspace)
- *
- * That route goes through VS Code's settings API, which knows how to merge
- * with JSONC-style comments, preserve formatting, etc.  When the extension
- * does intercept, this server-side function is never invoked.
+ * This is the **fallback path** for clients that don't intercept the quick-fix
+ * commands client-side.  A VS Code extension SHOULD intercept them and call
+ * `vscode.workspace.getConfiguration(...).update(...)` — that route goes
+ * through VS Code's settings API, which knows how to merge with JSONC-style
+ * comments, preserve formatting, etc.  When the extension does intercept,
+ * this server-side function is never invoked.
  *
  * Because we cannot safely merge with an existing JSONC settings.json from
  * here (rewriting would clobber comments and surrounding keys), we only
  * write when the file does NOT yet exist — that way no user data is at
- * risk.  When the file does exist, we log a hint and rely on the user to
- * either install the extension or edit settings.json manually.
+ * risk.  When the file does exist, we tell the user so the in-memory change
+ * is not silently lost on the next configuration reload.
  */
-async function persistIgnoresToWorkspaceSettings(ignore: string[]): Promise<void> {
+async function persistWorkspaceSetting(key: string, value: unknown): Promise<void> {
   const folders = await connection.workspace.getWorkspaceFolders();
   if (!folders || folders.length === 0) return;
 
@@ -681,11 +748,12 @@ async function persistIgnoresToWorkspaceSettings(ignore: string[]): Promise<void
   const settingsPath = path.join(dotVscode, 'settings.json');
 
   if (fs.existsSync(settingsPath)) {
-    connection.console.info(
-      'RRF LSP: `.vscode/settings.json` already exists — not auto-editing to ' +
-      'avoid clobbering comments. Add the ignore pattern manually, or update ' +
-      'the language-client extension to intercept the rrfgcode.addPathIgnore ' +
-      'command client-side.',
+    // Surface the skip to the user: the optimistic in-memory update is
+    // discarded by the next refreshConfig(), so a console-only hint would
+    // make the quick fix appear to silently stop working.
+    connection.window.showWarningMessage(
+      `RRF G-code: could not update .vscode/settings.json automatically — ` +
+      `add "${key}": ${JSON.stringify(value)} to it manually to keep this quick fix.`,
     );
     return;
   }
@@ -693,7 +761,7 @@ async function persistIgnoresToWorkspaceSettings(ignore: string[]): Promise<void
   // Safe to create from scratch.
   try {
     if (!fs.existsSync(dotVscode)) fs.mkdirSync(dotVscode, { recursive: true });
-    const obj = { 'rrfgcode.argCheck.paths.ignore': ignore };
+    const obj = { [key]: value };
     fs.writeFileSync(settingsPath, JSON.stringify(obj, null, 4) + '\n', 'utf8');
     connection.console.info(`RRF LSP: wrote ${settingsPath}`);
   } catch (e) {

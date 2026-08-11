@@ -74,9 +74,9 @@
         },
         "rrfgcode.maxLineLength": {
           "type": "integer",
-          "default": 256,
+          "default": 255,
           "minimum": 0,
-          "markdownDescription": "Report an error when a line exceeds this many characters. RepRapFirmware has a limited G-code input buffer, so overly long lines can be rejected by the firmware.\n\nSet to `0` to disable the check."
+          "markdownDescription": "Report an error when a command exceeds this many bytes. Only the command part counts — indentation, `N` line numbers, `*` checksums and `;` comments are excluded, because RepRapFirmware never stores them in its G-code input buffer.\n\nThe default matches current firmware (256-byte buffer including the terminator → 255 usable bytes). Older RRF 3.0–3.3 builds only accept 100–160 bytes, so lower the limit if you target them.\n\nSet to `0` to disable the check."
         }
       }
     }
