@@ -12,6 +12,7 @@ import * as path from 'path';
 import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
 import { Token, TokenType } from '../parser/types';
 import { findSdRoot } from './pathCompletion';
+import { PATH_FUNCTIONS } from './pathFunctions';
 import { ArgCheckConfig, isPathIgnored } from './argCheckConfig';
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -474,7 +475,11 @@ export function validateGCodeArgs(
 // `{ … }` block on a G-code line).  Only a static string literal that is
 // unambiguously the first argument is checked; dynamic expressions such as
 // `fileexists(var.path)` or `fileexists("a" ^ var.b)` are left alone.
-const PATH_FUNCTIONS = new Set(['fileread', 'fileexists']);
+//
+// Per-function resolve rules live in pathFunctions.ts (shared with completion
+// and go-to-definition).  Note that fileexists is registered with
+// checkExistence: false — a missing file is its intended use case, so only
+// fileread produces diagnostics here.
 
 export function validateFunctionPathArgs(
     tokens: Token[],
@@ -488,7 +493,8 @@ export function validateFunctionPathArgs(
     for (let i = 0; i < tokens.length; i++) {
         const fn = tokens[i];
         if (fn.type !== TokenType.FunctionName) continue;
-        if (!PATH_FUNCTIONS.has(fn.value.toLowerCase())) continue;
+        const rule = PATH_FUNCTIONS.get(fn.value.toLowerCase());
+        if (!rule || !rule.checkExistence) continue;
 
         const lparen = tokens[i + 1];
         const strTok = tokens[i + 2];
@@ -503,10 +509,9 @@ export function validateFunctionPathArgs(
         const literal = stringLiteralText(strTok);
         if (!literal) continue;
 
-        // Relative paths resolve against the SD-card root (no default folder).
         const diag = validateStaticPath(
             literal.text, strTok.line, literal.start, literal.end,
-            { sdRoot, config }, 'exists',
+            { sdRoot, config }, 'exists', rule.resolve,
         );
         if (diag) diagnostics.push(diag);
     }
