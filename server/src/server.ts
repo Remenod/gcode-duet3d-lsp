@@ -37,6 +37,8 @@ import {
   CodeActionParams,
   ExecuteCommandParams,
   DidChangeConfigurationNotification,
+  DidChangeWatchedFilesParams,
+  FileChangeType,
 } from 'vscode-languageserver/node';
 
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -371,6 +373,50 @@ documents.onDidClose((e: TextDocumentChangeEvent<TextDocument>) => {
   } catch {
     symbolTable.removeDocument(e.document.uri);
   }
+});
+
+// ── Watched-file events ───────────────────────────────────────────────────────
+//
+// The client watches workspace RRF files (see synchronize.fileEvents in
+// client/src/extension.ts).  Reacting here keeps three things fresh without a
+// server restart:
+//   • the symbol table / diagnostics for files edited outside VS Code,
+//   • path-existence diagnostics in open documents (a referenced file may have
+//     just been created or deleted),
+//   • the per-document SD-root cache — e.g. sys/config.g appearing for the
+//     first time turns a plain folder into a detectable SD-card mirror.
+connection.onDidChangeWatchedFiles((params: DidChangeWatchedFilesParams) => {
+  for (const change of params.changes) {
+    const uri = change.uri;
+    // Open documents are authoritative; their buffer already drives the index.
+    if (documents.get(uri)) continue;
+
+    if (change.type === FileChangeType.Deleted) {
+      symbolTable.removeDocument(uri);
+      backgroundDiagnosticUris.delete(uri);
+      connection.sendDiagnostics({ uri, diagnostics: [] });
+      continue;
+    }
+
+    // Created / Changed: (re-)index from disk, with the same content sniffing
+    // as the startup scan for shared extensions.
+    try {
+      const fsPath = URI.parse(uri).fsPath;
+      const ext = path.extname(fsPath).toLowerCase();
+      const content = fs.readFileSync(fsPath, 'utf8');
+      if ((ext === '' || SNIFFED_EXTENSIONS.has(ext)) && !looksLikeGCode(content)) continue;
+      symbolTable.indexDocument(uri, content);
+      backgroundDiagnosticUris.add(uri);
+      publishDiagnosticsForText(uri, content);
+    } catch { /* unreadable — skip */ }
+  }
+
+  // Any file event can change SD-root detection; the cache repopulates lazily.
+  invalidateSdRootCache();
+
+  // Path-existence warnings in open documents may refer to the files that just
+  // changed, so refresh what the user is looking at.
+  for (const doc of documents.all()) publishDiagnostics(doc);
 });
 
 function onDocumentChange(doc: TextDocument): void {
