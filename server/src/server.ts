@@ -208,10 +208,13 @@ connection.onInitialized(async () => {
 // didChangeConfiguration; we then re-publish diagnostics for every open
 // document.
 
-// Maximum G-code line length before a diagnostic is raised.  RepRapFirmware's
-// input buffer is limited, so overly long lines can be rejected by the printer.
+// Maximum G-code command length (in UTF-8 bytes) before a diagnostic is raised.
+// RepRapFirmware's input buffer (MaxGCodeLength = 256, including the null
+// terminator) holds at most 255 command bytes; longer commands fail with
+// "GCode command too long".  Only the command part counts: leading whitespace,
+// N line numbers, *checksums and ;-comments are never stored by the firmware.
 // A value of 0 disables the check.
-const DEFAULT_MAX_LINE_LENGTH = 256;
+const DEFAULT_MAX_LINE_LENGTH = 255;
 
 let argCheckConfig: ArgCheckConfig = defaultArgCheckConfig();
 let maxLineLength = DEFAULT_MAX_LINE_LENGTH;
@@ -381,6 +384,42 @@ function getAllDocTexts(): Map<string, string> {
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 
+interface CommandPart { text: string; start: number; end: number }
+
+/**
+ * Extract the part of a line that actually lands in the firmware's G-code
+ * buffer: strips leading whitespace, an `N<digits>` line number, a trailing
+ * `*<digits>` checksum and everything from an unquoted `;` on.  Returns null
+ * for blank and comment-only lines.
+ */
+function commandPartOfLine(lineText: string): CommandPart | null {
+  // Comment start: the first ';' outside a "…" string.  A doubled "" escape
+  // toggles the string state twice, so the tracking stays correct.
+  let inString = false;
+  let end = lineText.length;
+  for (let i = 0; i < lineText.length; i++) {
+    const c = lineText[i];
+    if (c === '"') inString = !inString;
+    else if (c === ';' && !inString) { end = i; break; }
+  }
+
+  let start = 0;
+  while (start < end && (lineText[start] === ' ' || lineText[start] === '\t')) start++;
+
+  const lineNumber = /^[Nn]\d+[ \t]*/.exec(lineText.slice(start, end));
+  if (lineNumber) start += lineNumber[0].length;
+
+  while (end > start && (lineText[end - 1] === ' ' || lineText[end - 1] === '\t')) end--;
+  const checksum = /\*\d+$/.exec(lineText.slice(start, end));
+  if (checksum) {
+    end -= checksum[0].length;
+    while (end > start && (lineText[end - 1] === ' ' || lineText[end - 1] === '\t')) end--;
+  }
+
+  if (end <= start) return null;
+  return { text: lineText.slice(start, end), start, end };
+}
+
 /** Publish diagnostics for an open TextDocument. */
 function publishDiagnostics(doc: TextDocument): void {
   publishDiagnosticsForText(doc.uri, doc.getText());
@@ -406,20 +445,34 @@ function publishDiagnosticsForText(uri: string, text: string): void {
     const lineText = lines[i];
 
     // Line-length check runs before tokenization so it is reported even for
-    // lines that also contain lexer errors.  RepRapFirmware's G-code input
-    // buffer is limited; lines longer than the configured maximum can be
-    // rejected by the firmware.
-    if (maxLineLength > 0 && lineText.length > maxLineLength) {
-      diagnostics.push({
-        severity: DiagnosticSeverity.Error,
-        range: mkRange(i, maxLineLength, i, lineText.length),
-        message:
-          `Line is ${lineText.length} characters long; RepRapFirmware limits G-code ` +
-          `lines to ${maxLineLength} characters and may reject longer ones.`,
-        source: 'rrf-gcode',
-        code: LINE_TOO_LONG_CODE,
-        data: { length: lineText.length, max: maxLineLength },
-      });
+    // lines that also contain lexer errors.  Only the command part is measured
+    // (in UTF-8 bytes, matching the firmware buffer) — comments, indentation,
+    // N line numbers and *checksums are excluded because the firmware never
+    // stores them.
+    if (maxLineLength > 0) {
+      const part = commandPartOfLine(lineText);
+      const bytes = part ? Buffer.byteLength(part.text, 'utf8') : 0;
+      if (part && bytes > maxLineLength) {
+        // Column where the byte budget runs out (the range is expressed in
+        // UTF-16 columns even though the limit is measured in UTF-8 bytes).
+        let overflowCol = part.start;
+        let used = 0;
+        for (const ch of part.text) {
+          used += Buffer.byteLength(ch, 'utf8');
+          if (used > maxLineLength) break;
+          overflowCol += ch.length;
+        }
+        diagnostics.push({
+          severity: DiagnosticSeverity.Error,
+          range: mkRange(i, overflowCol, i, part.end),
+          message:
+            `Command is ${bytes} bytes long, exceeding rrfgcode.maxLineLength (${maxLineLength}). ` +
+            `RepRapFirmware rejects commands longer than its input buffer with "GCode command too long".`,
+          source: 'rrf-gcode',
+          code: LINE_TOO_LONG_CODE,
+          data: { length: bytes, max: maxLineLength },
+        });
+      }
     }
 
     const indent = lineIndent(lineText);
