@@ -156,5 +156,5 @@ export const SEMANTIC_TOKEN_TYPES = [
 export const SEMANTIC_TOKEN_MODIFIERS = [
     'declaration',  // 0  the defining occurrence of a symbol (var x = …)
     'readonly',     // 1  named constants, param.X (set at call site)
-    'deprecated',   // 2  >>> redirect operator
+    'deprecated',   // 2  reserved for genuinely deprecated constructs
 ];
