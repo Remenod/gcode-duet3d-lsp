@@ -71,6 +71,12 @@
           },
           "default": [],
           "markdownDescription": "Glob patterns (forward slashes, relative to the SD-card root) for paths that should NOT trigger 'file not found' warnings.\n\nSupported patterns:\n- `sys/legacy.g` — exact file\n- `macros/**` — entire subtree\n- `macros/*.g` — direct children only\n- `{old,new}/*.g` — alternation\n\nPaths are workspace-relative on purpose, so the setting stays portable when the project is moved or shared via version control."
+        },
+        "rrfgcode.maxLineLength": {
+          "type": "integer",
+          "default": 256,
+          "minimum": 0,
+          "markdownDescription": "Report an error when a line exceeds this many characters. RepRapFirmware has a limited G-code input buffer, so overly long lines can be rejected by the firmware.\n\nSet to `0` to disable the check."
         }
       }
     }

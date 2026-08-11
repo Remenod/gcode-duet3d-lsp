@@ -58,12 +58,14 @@ import { buildRenameEdit } from './analysis/rename';
 import { buildReferences } from './analysis/references';
 import { findPathStringContext, buildPathCompletions } from './analysis/pathCompletion';
 import {
-  validateGCodeArgs, getSdRootForUri, invalidateSdRootCache,
+  validateGCodeArgs, validateFunctionPathArgs, getSdRootForUri, invalidateSdRootCache,
 } from './analysis/argValidators';
 import {
   ArgCheckConfig, defaultArgCheckConfig, normaliseArgCheckConfig,
 } from './analysis/argCheckConfig';
-import { buildCodeActions, CMD_ADD_PATH_IGNORE } from './analysis/codeActions';
+import {
+  buildCodeActions, CMD_ADD_PATH_IGNORE, CMD_SET_MAX_LINE_LENGTH, LINE_TOO_LONG_CODE,
+} from './analysis/codeActions';
 import { pathLocationAtCursor } from './analysis/pathDefinition';
 import { lineIndent, findTokenAtChar } from './analysis/utils';
 
@@ -168,7 +170,7 @@ connection.onInitialize((_params: InitializeParams): InitializeResult => {
         codeActionKinds: [CodeActionKind.QuickFix],
       },
       executeCommandProvider: {
-        commands: [CMD_ADD_PATH_IGNORE],
+        commands: [CMD_ADD_PATH_IGNORE, CMD_SET_MAX_LINE_LENGTH],
       },
     },
   };
@@ -206,15 +208,31 @@ connection.onInitialized(async () => {
 // didChangeConfiguration; we then re-publish diagnostics for every open
 // document.
 
+// Maximum G-code line length before a diagnostic is raised.  RepRapFirmware's
+// input buffer is limited, so overly long lines can be rejected by the printer.
+// A value of 0 disables the check.
+const DEFAULT_MAX_LINE_LENGTH = 256;
+
 let argCheckConfig: ArgCheckConfig = defaultArgCheckConfig();
+let maxLineLength = DEFAULT_MAX_LINE_LENGTH;
 let configLoaded = false;
+
+function normaliseMaxLineLength(raw: unknown): number {
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return Math.floor(raw);
+  return DEFAULT_MAX_LINE_LENGTH;
+}
 
 async function refreshConfig(): Promise<void> {
   try {
-    const raw = await connection.workspace.getConfiguration('rrfgcode.argCheck');
-    argCheckConfig = normaliseArgCheckConfig(raw);
+    const [argRaw, maxRaw] = await Promise.all([
+      connection.workspace.getConfiguration('rrfgcode.argCheck'),
+      connection.workspace.getConfiguration('rrfgcode.maxLineLength'),
+    ]);
+    argCheckConfig = normaliseArgCheckConfig(argRaw);
+    maxLineLength = normaliseMaxLineLength(maxRaw);
   } catch {
     argCheckConfig = defaultArgCheckConfig();
+    maxLineLength = DEFAULT_MAX_LINE_LENGTH;
   }
   configLoaded = true;
 }
@@ -386,6 +404,24 @@ function publishDiagnosticsForText(uri: string, text: string): void {
 
   for (let i = 0; i < lines.length; i++) {
     const lineText = lines[i];
+
+    // Line-length check runs before tokenization so it is reported even for
+    // lines that also contain lexer errors.  RepRapFirmware's G-code input
+    // buffer is limited; lines longer than the configured maximum can be
+    // rejected by the firmware.
+    if (maxLineLength > 0 && lineText.length > maxLineLength) {
+      diagnostics.push({
+        severity: DiagnosticSeverity.Error,
+        range: mkRange(i, maxLineLength, i, lineText.length),
+        message:
+          `Line is ${lineText.length} characters long; RepRapFirmware limits G-code ` +
+          `lines to ${maxLineLength} characters and may reject longer ones.`,
+        source: 'rrf-gcode',
+        code: LINE_TOO_LONG_CODE,
+        data: { length: lineText.length, max: maxLineLength },
+      });
+    }
+
     const indent = lineIndent(lineText);
     const lexer = new Lexer(lineText, i);
     const tokens = lexer.tokenize();
@@ -426,6 +462,10 @@ function publishDiagnosticsForText(uri: string, text: string): void {
       sdRoot,
       argCheckConfig,
     ));
+
+    // Path-taking functions (fileexists/fileread) can appear on any line, not
+    // just G/M/T command lines, so they are validated separately.
+    diagnostics.push(...validateFunctionPathArgs(tokens, sdRoot, argCheckConfig));
   }
 
   connection.sendDiagnostics({ uri, diagnostics });
